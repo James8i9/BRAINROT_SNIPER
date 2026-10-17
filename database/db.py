@@ -154,19 +154,29 @@ async def init_db() -> None:
             pass
 
         # ══════════════════════════════════════════════════════════════════════
-        # BOT-MANAGED HOT WALLETS
+        # MULTI-WALLET SYSTEM (Fund Wallet + Buy Wallets)
         # ══════════════════════════════════════════════════════════════════════
 
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS bot_wallets (
+            CREATE TABLE IF NOT EXISTS multi_wallets (
                 id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id               INTEGER NOT NULL UNIQUE,
+                user_id               INTEGER NOT NULL,
                 wallet_address        TEXT    NOT NULL,
                 encrypted_private_key TEXT    NOT NULL,
-                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                wallet_type           TEXT    NOT NULL CHECK(wallet_type IN ('fund', 'buy')),
+                label                 TEXT    DEFAULT '',
+                is_active             INTEGER DEFAULT 1,
+                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, wallet_address)
             )
         """)
 
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_multi_wallets_user ON multi_wallets(user_id)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_multi_wallets_type ON multi_wallets(user_id, wallet_type)"
+        )
         # ══════════════════════════════════════════════════════════════════════
         # SNIPER TOOL TABLES
         # ══════════════════════════════════════════════════════════════════════
