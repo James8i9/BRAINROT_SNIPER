@@ -16,7 +16,7 @@ def build_main_menu() -> InlineKeyboardMarkup:
     # ── Row 1: New user onboarding + Wallet ───────────────────────────────────
     builder.row(
         InlineKeyboardButton(text="🆕 NEW USERS / INFO",      callback_data="menu:new_users"),
-        InlineKeyboardButton(text="💼 WALLET",                callback_data="menu:wallet"),
+        InlineKeyboardButton(text="💼 WALLET",                callback_data="mw:main"),
     )
     # ── Row 3: Sniper Tool (full width) ───────────────────────────────────────
     builder.row(
