@@ -16,6 +16,17 @@ from utils.sqlite_storage import SQLiteStorage
 from utils.config import settings
 from database.db import init_db
 
+from aiogram.types import BotCommand
+
+# ── Set Bot Commands (the menu that appears when you type /) ──────────────────
+await bot.set_my_commands([
+    BotCommand(command="start",     description="Open the bot"),
+    BotCommand(command="wallet",    description="Multi-Wallet Manager"),
+    BotCommand(command="sniper",    description="Sniper Tool"),
+    BotCommand(command="copy",      description="Copy Trade"),
+    BotCommand(command="candle",    description="Candle Sniper"),
+])
+
 # ── Handlers ───────────────────────────────────────────────────────────────────
 from bot.handlers import start, help, menu, callbacks
 from bot.handlers import raid            # Legacy Raid Center (admin-created)
@@ -56,6 +67,9 @@ async def main() -> None:
         token=settings.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    # ↓↓↓ ADD THE set_my_commands CODE HERE ↓↓↓
+    await bot.set_my_commands([...])
 
     dp = Dispatcher(storage=SQLiteStorage())
 
