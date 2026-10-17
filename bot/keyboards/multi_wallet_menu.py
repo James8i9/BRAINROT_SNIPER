@@ -21,6 +21,9 @@ def build_multi_wallet_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📋 My Wallets", callback_data="mw:list"),
     )
     builder.row(
+        InlineKeyboardButton(text="💸 Distribute SOL", callback_data="mw:distribute"),
+    )
+    builder.row(
         InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="menu:back"),
     )
     return builder.as_markup()
@@ -44,5 +47,16 @@ def build_back_to_mw() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="⬅️ Back", callback_data="mw:main")
+    )
+    return builder.as_markup()
+
+
+def build_confirm_distribute(amount: float) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Confirm & Send", callback_data=f"mw:confirm_dist:{amount}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Cancel", callback_data="mw:main"),
     )
     return builder.as_markup()
