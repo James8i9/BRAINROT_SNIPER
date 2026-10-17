@@ -28,14 +28,6 @@ def build_main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🕯️  CANDLE SNIPER", callback_data="cs:main"),
     )
 
-    # ── Portfolio + Profile ────────────────────────────────────────────────────
-    builder.row(
-        InlineKeyboardButton(text="📈  VIEW MY PORTFOLIO", callback_data="menu:portfolio_guide"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="👤  PROFILE", callback_data="profile:main"),
-    )
-
     return builder.as_markup()
 
 
