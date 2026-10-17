@@ -68,8 +68,6 @@ async def main() -> None:
         BotCommand(command="sniper",    description="Sniper Tool"),
         BotCommand(command="copy",      description="Copy Trade"),
         BotCommand(command="candle",    description="Candle Sniper"),
-        BotCommand(command="portfolio", description="View Portfolio"),
-        BotCommand(command="profile",   description="Your Profile"),
     ])
     # ↑↑↑ END OF COMMANDS ↑↑↑
 
