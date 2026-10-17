@@ -16,8 +16,8 @@ router = Router()
 MENU_TEXT = (
     "📋 <b>Main Menu</b>\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "Select a module below to get started.\n"
-    "<i>Inactive modules will show a coming soon message.</i>"
+    "Select a module below."
+)
 )
 
 
