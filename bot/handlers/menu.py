@@ -18,7 +18,6 @@ MENU_TEXT = (
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     "Select a module below."
 )
-)
 
 
 @router.message(Command("menu"))
