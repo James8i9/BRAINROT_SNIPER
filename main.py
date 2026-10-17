@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from utils.sqlite_storage import SQLiteStorage
 
+from bot.handlers import commands
 from utils.config import settings
 from database.db import init_db
 
@@ -81,6 +82,7 @@ async def main() -> None:
     # Order matters: more specific routers must come before the catch-all callbacks router.
     dp.include_router(start.router)
     dp.include_router(help.router)
+    dp.include_router(commands.router)
     dp.include_router(menu.router)
     dp.include_router(raid.router)          # raid:*    callbacks
     dp.include_router(raids.router)         # hub:*     callbacks + FSM
