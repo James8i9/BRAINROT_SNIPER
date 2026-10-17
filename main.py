@@ -29,6 +29,7 @@ from bot.handlers import copy_trade      # ct:* Copy Trading
 from bot.handlers import wallet_scout    # ws:* Wallet Scout (Dragon mechanics)
 from bot.handlers import candle_sniper   # cs:* Candle Sniper strategy
 from bot.handlers import tutorial        # tut:* User Tutorial
+from bot.handlers import multi_wallet   # Multi-Wallet Manager
 
 # ── Services ───────────────────────────────────────────────────────────────────
 from services.pumpportal_ws_service import pump_service
@@ -72,6 +73,7 @@ async def main() -> None:
     dp.include_router(admin_raids.router)   # admin     commands
     dp.include_router(admin_user.router)    # /myid /adminuser /admingrant etc
     dp.include_router(profile.router)        # profile:* callbacks
+    dp.include_router(multi_wallet.router)   # mw:* Multi-Wallet Manager
     dp.include_router(auto_exit.router)      # ae:*      callbacks + FSM
     dp.include_router(sniper.router)         # sniper:*  callbacks + FSM
     dp.include_router(copy_trade.router)     # ct:*      callbacks + FSM
