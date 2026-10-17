@@ -156,3 +156,110 @@ async def get_keypair_from_wallet(wallet_row: dict):
     """Decrypt and return a solders Keypair. Never log the result."""
     privkey_bytes = _fernet().decrypt(wallet_row["encrypted_private_key"].encode())
     return Keypair.from_bytes(privkey_bytes)
+
+# ──────────────────────────────────────────────────────────────
+# SOL Distribution
+# ──────────────────────────────────────────────────────────────
+
+async def distribute_sol(user_id: int, amount_each: float) -> dict:
+    """
+    Send `amount_each` SOL from the Fund Wallet to every active Buy Wallet.
+    Returns {"success": bool, "signature": str|None, "error": str|None, "total_sent": float}
+    """
+    import aiohttp
+    import base64
+    from solders.pubkey import Pubkey
+    from solders.system_program import transfer, TransferParams
+    from solders.transaction import Transaction
+    from solders.message import Message
+    from solders.hash import Hash
+    from utils.config import get_rpc_url
+
+    NETWORK_FEE_RESERVE = 0.00001  # safety buffer per transaction
+
+    fund = await get_fund_wallet(user_id)
+    if not fund:
+        return {"success": False, "signature": None, "error": "No Fund Wallet found. Import one first.", "total_sent": 0}
+
+    buy_wallets = await get_buy_wallets(user_id)
+    if not buy_wallets:
+        return {"success": False, "signature": None, "error": "No Buy Wallets found. Generate some first.", "total_sent": 0}
+
+    if amount_each <= 0:
+        return {"success": False, "signature": None, "error": "Amount must be greater than 0.", "total_sent": 0}
+
+    total_needed = amount_each * len(buy_wallets) + NETWORK_FEE_RESERVE
+
+    # Get Fund Wallet balance
+    from services.bot_wallet_service import get_sol_balance, get_latest_blockhash
+    balance = await get_sol_balance(fund["wallet_address"])
+    if balance is None:
+        return {"success": False, "signature": None, "error": "Could not fetch Fund Wallet balance.", "total_sent": 0}
+
+    if balance < total_needed:
+        return {
+            "success": False,
+            "signature": None,
+            "error": f"Insufficient balance. Need {total_needed:.6f} SOL, have {balance:.6f} SOL.",
+            "total_sent": 0,
+        }
+
+    # Decrypt Fund Wallet keypair
+    keypair = await get_keypair_from_wallet(fund)
+
+    blockhash_str = await get_latest_blockhash()
+    if not blockhash_str:
+        return {"success": False, "signature": None, "error": "Could not fetch blockhash.", "total_sent": 0}
+
+    try:
+        instructions = []
+        lamports_each = int(amount_each * 1_000_000_000)
+
+        for w in buy_wallets:
+            ix = transfer(TransferParams(
+                from_pubkey=keypair.pubkey(),
+                to_pubkey=Pubkey.from_string(w["wallet_address"]),
+                lamports=lamports_each,
+            ))
+            instructions.append(ix)
+
+        msg = Message.new_with_blockhash(instructions, keypair.pubkey(), Hash.from_string(blockhash_str))
+        tx = Transaction([keypair], msg, Hash.from_string(blockhash_str))
+        raw = bytes(tx)
+    except Exception as e:
+        logger.error(f"distribute_sol build tx failed: {e}")
+        return {"success": False, "signature": None, "error": f"Failed to build transaction: {e}", "total_sent": 0}
+
+    # Send transaction
+    encoded = base64.b64encode(raw).decode()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                get_rpc_url(),
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "sendTransaction",
+                    "params": [encoded, {"encoding": "base64", "skipPreflight": False, "maxRetries": 5}],
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                data = await resp.json(content_type=None)
+                if "error" in data:
+                    return {"success": False, "signature": None, "error": str(data["error"]), "total_sent": 0}
+
+                sig = data.get("result")
+                total_sent = amount_each * len(buy_wallets)
+                logger.info(f"Distributed {total_sent} SOL to {len(buy_wallets)} wallets. tx={sig}")
+                return {
+                    "success": True,
+                    "signature": sig,
+                    "error": None,
+                    "total_sent": total_sent,
+                    "count": len(buy_wallets),
+                    "amount_each": amount_each,
+                }
+    except Exception as e:
+        logger.error(f"distribute_sol send failed: {e}")
+        return {"success": False, "signature": None, "error": str(e), "total_sent": 0}
