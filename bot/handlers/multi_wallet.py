@@ -14,6 +14,7 @@ from bot.keyboards.multi_wallet_menu import (
     build_multi_wallet_menu,
     build_generate_count_menu,
     build_back_to_mw,
+    build_confirm_distribute,
 )
 from services.multi_wallet_service import (
     import_fund_wallet,
@@ -21,6 +22,7 @@ from services.multi_wallet_service import (
     generate_buy_wallets,
     get_buy_wallets,
     list_all_wallets,
+    distribute_sol,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ router = Router()
 
 class MultiWalletStates(StatesGroup):
     waiting_for_fund_key = State()
+    waiting_for_amount = State()
 
 
 def _short(addr: str) -> str:
@@ -182,5 +185,110 @@ async def cb_list_wallets(callback: CallbackQuery) -> None:
         text,
         reply_markup=build_multi_wallet_menu(),
         parse_mode="HTML",
+    )
+    await callback.answer() 
+
+# ── Distribute SOL ────────────────────────────────────────────────────────────
+@router.callback_query(F.data == "mw:distribute")
+async def cb_distribute(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    fund = await get_fund_wallet(user_id)
+    buys = await get_buy_wallets(user_id)
+
+    if not fund:
+        await callback.message.edit_text(
+            "❌ No Fund Wallet found.\n\nImport a Fund Wallet first.",
+            reply_markup=build_back_to_mw(),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    if not buys:
+        await callback.message.edit_text(
+            "❌ No Buy Wallets found.\n\nGenerate some Buy Wallets first.",
+            reply_markup=build_back_to_mw(),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    await state.set_state(MultiWalletStates.waiting_for_amount)
+    await callback.message.edit_text(
+        f"💸 <b>Distribute SOL</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Fund Wallet: <code>{_short(fund['wallet_address'])}</code>\n"
+        f"Buy Wallets: <b>{len(buys)}</b>\n\n"
+        f"Send the amount of SOL you want to send to <b>each</b> Buy Wallet.\n\n"
+        f"Example: <code>0.05</code>",
+        reply_markup=build_back_to_mw(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(MultiWalletStates.waiting_for_amount)
+async def process_amount(message: Message, state: FSMContext) -> None:
+    try:
+        amount = float(message.text.strip())
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+    except Exception:
+        await message.answer(
+            "❌ Invalid amount. Please send a number like <code>0.05</code>",
+            parse_mode="HTML",
+            reply_markup=build_back_to_mw(),
+        )
+        return
+
+    user_id = message.from_user.id
+    buys = await get_buy_wallets(user_id)
+    total = amount * len(buys)
+
+    await state.clear()
+    await message.answer(
+        f"⚠️ <b>Confirm Distribution</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"You are about to send:\n"
+        f"• <b>{amount} SOL</b> to each of <b>{len(buys)}</b> Buy Wallets\n"
+        f"• <b>Total: {total:.6f} SOL</b>\n\n"
+        f"This action cannot be undone.",
+        reply_markup=build_confirm_distribute(amount),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("mw:confirm_dist:"))
+async def cb_confirm_distribute(callback: CallbackQuery) -> None:
+    amount = float(callback.data.split(":")[-1])
+    user_id = callback.from_user.id
+
+    await callback.message.edit_text(
+        "⏳ <b>Sending transaction...</b>\n\nPlease wait.",
+        parse_mode="HTML",
+    )
+
+    result = await distribute_sol(user_id, amount)
+
+    if result["success"]:
+        text = (
+            f"✅ <b>Distribution Successful!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Sent <b>{result['amount_each']} SOL</b> to each of <b>{result['count']}</b> wallets\n"
+            f"Total: <b>{result['total_sent']:.6f} SOL</b>\n\n"
+            f"Transaction:\n<code>{result['signature']}</code>\n\n"
+            f"<a href='https://solscan.io/tx/{result['signature']}'>View on Solscan</a>"
+        )
+    else:
+        text = (
+            f"❌ <b>Distribution Failed</b>\n\n"
+            f"Error: <code>{result.get('error', 'Unknown')}</code>"
+        )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_multi_wallet_menu(),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
     )
     await callback.answer()
