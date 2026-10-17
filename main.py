@@ -21,17 +21,12 @@ from aiogram.types import BotCommand
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
 from bot.handlers import start, help, menu, callbacks
-from bot.handlers import raid            # Legacy Raid Center (admin-created)
-from bot.handlers import raids           # Raid Hub (user-generated)
-from bot.handlers import admin_raids     # Admin moderation commands
 from bot.handlers import admin_user      # Admin user management + /myid
 from bot.handlers import sniper          # Sniper Tool
-from bot.handlers import profile         # Profile + stats
 from bot.handlers import auto_exit       # Auto-Exit Manager
 from bot.handlers import copy_trade      # ct:* Copy Trading
 from bot.handlers import wallet_scout    # ws:* Wallet Scout (Dragon mechanics)
 from bot.handlers import candle_sniper   # cs:* Candle Sniper strategy
-from bot.handlers import tutorial        # tut:* User Tutorial
 from bot.handlers import multi_wallet   # Multi-Wallet Manager
 
 # ── Services ───────────────────────────────────────────────────────────────────
@@ -80,21 +75,15 @@ async def main() -> None:
     # ── Routers ────────────────────────────────────────────────────────────────
     # Order matters: more specific routers must come before the catch-all callbacks router.
     dp.include_router(start.router)
-    dp.include_router(help.router)
     dp.include_router(commands.router)
     dp.include_router(menu.router)
-    dp.include_router(raid.router)          # raid:*    callbacks
-    dp.include_router(raids.router)         # hub:*     callbacks + FSM
-    dp.include_router(admin_raids.router)   # admin     commands
     dp.include_router(admin_user.router)    # /myid /adminuser /admingrant etc
-    dp.include_router(profile.router)        # profile:* callbacks
     dp.include_router(multi_wallet.router)   # mw:* Multi-Wallet Manager
     dp.include_router(auto_exit.router)      # ae:*      callbacks + FSM
     dp.include_router(sniper.router)         # sniper:*  callbacks + FSM
     dp.include_router(copy_trade.router)     # ct:*      callbacks + FSM
     dp.include_router(wallet_scout.router)   # ws:*      callbacks + FSM
     dp.include_router(candle_sniper.router)  # cs:*      callbacks + FSM (/candle_sniper)
-    dp.include_router(tutorial.router)       # tut:*     User Tutorial
     dp.include_router(callbacks.router)      # menu:*    callbacks (last)
 
     # ── Startup Log ────────────────────────────────────────────────────────────
