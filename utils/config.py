@@ -35,9 +35,12 @@ class Settings:
     BRAND_HANDLE: str = ""           # social handle shown in share copy, e.g. "@myproject"
     SHARE_HASHTAG: str = ""          # e.g. "#mybot" — blank = no hashtag
 
-    # ── Wallet encryption ──────────────────────────────────────────────────────
-    # Encrypts user bot-wallet private keys at rest. Required — see .env.example.
+        # ── Wallet encryption ──────────────────────────────────────────────────────
     WALLET_ENCRYPTION_KEY: str = ""
+
+    # ── License / Activation ───────────────────────────────────────────────────
+    ACTIVATION_WALLET: str = ""
+    ACTIVATION_AMOUNT_SOL: float = 1.0
 
     # ── Raid Hub behaviour ─────────────────────────────────────────────────────
     # True  = raids go live immediately after creation
@@ -93,7 +96,9 @@ def _load_settings() -> Settings:
         TOKEN_NAME              = os.getenv("TOKEN_NAME", "TOKEN").strip(),
         BRAND_HANDLE            = os.getenv("BRAND_HANDLE", "").strip(),
         SHARE_HASHTAG           = os.getenv("SHARE_HASHTAG", "").strip(),
-        WALLET_ENCRYPTION_KEY   = enc_key,
+WALLET_ENCRYPTION_KEY   = enc_key,
+        ACTIVATION_WALLET       = os.getenv("ACTIVATION_WALLET", "").strip(),
+        ACTIVATION_AMOUNT_SOL   = float(os.getenv("ACTIVATION_AMOUNT_SOL", "1.0")),
         RAID_AUTO_APPROVE       = auto_approve,
         DAILY_RAID_LIMIT        = daily_limit,
     )
