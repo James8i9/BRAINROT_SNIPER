@@ -1,7 +1,7 @@
 """
 bot/handlers/multi_wallet.py
 ============================
-Multi-Wallet Manager — Fund Wallet + Buy Wallets + Distribute + Withdraw
+Multi-Wallet Manager — Fund Wallet + Buy Wallets + Distribute
 """
 
 import logging
@@ -10,16 +10,6 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from services.license_service import is_user_activated
-
-# At the beginning of cb_mw_main and cmd_wallet:
-if not await is_user_activated(user_id):
-    await callback.message.edit_text(   # or message.answer
-        "🔒 You need an active license to use the Wallet Manager.\n\nUse /start to activate.",
-        parse_mode="HTML"
-    )
-    return
-    
 from bot.keyboards.multi_wallet_menu import (
     build_multi_wallet_menu,
     build_generate_count_menu,
@@ -33,9 +23,9 @@ from services.multi_wallet_service import (
     get_buy_wallets,
     list_all_wallets,
     distribute_sol,
-    get_keypair_from_wallet,
 )
 from services.bot_wallet_service import get_sol_balance
+from services.license_service import is_user_activated
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -44,8 +34,6 @@ router = Router()
 class MultiWalletStates(StatesGroup):
     waiting_for_fund_key = State()
     waiting_for_amount = State()
-    waiting_for_withdraw_amount = State()
-    waiting_for_withdraw_address = State()
 
 
 def _short(addr: str) -> str:
@@ -55,13 +43,11 @@ def _short(addr: str) -> str:
 
 
 async def _build_wallet_overview(user_id: int) -> str:
-    """Build a clean overview of Fund + Buy wallets with balances."""
     fund = await get_fund_wallet(user_id)
     buys = await get_buy_wallets(user_id)
 
     lines = ["💼 <b>Multi-Wallet Manager</b>", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━", ""]
 
-    # Fund Wallet
     if fund:
         bal = await get_sol_balance(fund["wallet_address"])
         bal_str = f"{bal:.4f} SOL" if bal is not None else "?.???? SOL"
@@ -74,7 +60,6 @@ async def _build_wallet_overview(user_id: int) -> str:
 
     lines.append("")
 
-    # Buy Wallets
     if buys:
         lines.append(f"<b>🛒 Buy Wallets ({len(buys)})</b>")
         for i, w in enumerate(buys, 1):
@@ -93,8 +78,19 @@ async def _build_wallet_overview(user_id: int) -> str:
 # ── Main Menu ────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "mw:main")
 async def cb_mw_main(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+
+    # License check
+    if not await is_user_activated(user_id):
+        await callback.message.edit_text(
+            "🔒 You need an active license to use the Wallet Manager.\n\nUse /start to activate.",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
     await state.clear()
-    text = await _build_wallet_overview(callback.from_user.id)
+    text = await _build_wallet_overview(user_id)
     await callback.message.edit_text(
         text,
         reply_markup=build_multi_wallet_menu(),
@@ -106,6 +102,11 @@ async def cb_mw_main(callback: CallbackQuery, state: FSMContext) -> None:
 # ── Import Fund Wallet ────────────────────────────────────────────────────────
 @router.callback_query(F.data == "mw:import_fund")
 async def cb_import_fund(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    if not await is_user_activated(user_id):
+        await callback.answer("License required", show_alert=True)
+        return
+
     await state.set_state(MultiWalletStates.waiting_for_fund_key)
     await callback.message.edit_text(
         "📥 <b>Import Fund Wallet</b>\n"
@@ -153,6 +154,10 @@ async def process_fund_key(message: Message, state: FSMContext) -> None:
 # ── Generate Buy Wallets ──────────────────────────────────────────────────────
 @router.callback_query(F.data == "mw:generate")
 async def cb_generate(callback: CallbackQuery) -> None:
+    if not await is_user_activated(callback.from_user.id):
+        await callback.answer("License required", show_alert=True)
+        return
+
     await callback.message.edit_text(
         "⚙️ <b>Generate Buy Wallets</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -185,9 +190,13 @@ async def cb_generate_count(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-# ── List Wallets (refresh) ────────────────────────────────────────────────────
+# ── List / Refresh ────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "mw:list")
 async def cb_list_wallets(callback: CallbackQuery) -> None:
+    if not await is_user_activated(callback.from_user.id):
+        await callback.answer("License required", show_alert=True)
+        return
+
     text = await _build_wallet_overview(callback.from_user.id)
     await callback.message.edit_text(
         text,
@@ -201,6 +210,11 @@ async def cb_list_wallets(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "mw:distribute")
 async def cb_distribute(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
+
+    if not await is_user_activated(user_id):
+        await callback.answer("License required", show_alert=True)
+        return
+
     fund = await get_fund_wallet(user_id)
     buys = await get_buy_wallets(user_id)
 
