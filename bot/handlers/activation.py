@@ -7,7 +7,7 @@ Guided license + payment activation flow
 import logging
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -35,13 +35,20 @@ def _activation_wallet() -> str:
     return getattr(settings, "ACTIVATION_WALLET", "NOT_CONFIGURED")
 
 
+def _welcome_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 I HAVE A LICENSE", callback_data="act:have_license")],
+        # You can add "VIEW ACCESS PLAN" later if you want
+    ])
+
+
 # ── /start ────────────────────────────────────────────────────────────────────
 @router.message(CommandStart())
 async def handle_start(message: Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
 
     if await is_user_activated(user_id):
-        # Already activated → normal welcome
         await message.answer(
             "⚡ <b>SHADOWSNIPE</b>\n"
             "<code>ONLINE  //  SOLANA</code>\n\n"
@@ -52,19 +59,37 @@ async def handle_start(message: Message, state: FSMContext):
         )
         return
 
-    # Not activated → start guided flow
-    await state.set_state(ActivationStates.waiting_for_license_key)
+    # Not activated
     await message.answer(
-        "👋 <b>Welcome!</b>\n\n"
-        "Please enter your <b>license key</b> to continue.\n\n"
+        "⚡ <b>WELCOME TO ShadowSnipe</b> 🎯\n\n"
+        "<b>PRIVATE ON-CHAIN EXECUTION</b>\n"
+        "Fast. Intelligent. Automated.\n\n"
+        "Choose an option below to continue.",
+        reply_markup=_welcome_keyboard(),
+        parse_mode="HTML"
+    )
+
+
+# ── Button: I HAVE A LICENSE ──────────────────────────────────────────────────
+@router.callback_query(F.data == "act:have_license")
+async def cb_have_license(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ActivationStates.waiting_for_license_key)
+    await callback.message.edit_text(
+        "🔑 <b>Enter your License Key</b>\n\n"
+        "Please send your license key now.\n"
         "Format example: <code>6H16K-J6LB6-ZK8U1-CWP1</code>",
         parse_mode="HTML"
     )
+    await callback.answer()
 
 
 # ── License key received ──────────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_license_key)
 async def process_license_key(message: Message, state: FSMContext):
+    # Ignore commands while in this state
+    if message.text and message.text.startswith("/"):
+        return
+
     key = message.text.strip().upper()
     record = await get_license_key(key)
 
@@ -76,7 +101,6 @@ async def process_license_key(message: Message, state: FSMContext):
         await message.answer("❌ This license key has already been used.")
         return
 
-    # Valid unused key → ask for payment
     await state.update_data(license_key=key)
     await state.set_state(ActivationStates.waiting_for_payment_signature)
 
@@ -96,6 +120,9 @@ async def process_license_key(message: Message, state: FSMContext):
 # ── Payment signature received ────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_payment_signature)
 async def process_payment_signature(message: Message, state: FSMContext):
+    if message.text and message.text.startswith("/"):
+        return
+
     signature = message.text.strip()
     data = await state.get_data()
     license_key = data.get("license_key")
@@ -113,12 +140,11 @@ async def process_payment_signature(message: Message, state: FSMContext):
         await message.answer(
             f"❌ Payment verification failed.\n\n"
             f"<code>{result.get('error')}</code>\n\n"
-            f"Please make sure you sent the correct amount to the correct address and try again.",
+            f"Please try again with a valid transaction signature.",
             parse_mode="HTML"
         )
         return
 
-    # Success
     user_id = message.from_user.id
     await mark_key_used(license_key, user_id)
     await activate_user(user_id, license_key, signature)
@@ -137,11 +163,17 @@ async def process_payment_signature(message: Message, state: FSMContext):
 
 # ── Admin: Generate license keys ──────────────────────────────────────────────
 @router.message(Command("genkey"))
-async def cmd_genkey(message: Message):
-    # Simple admin check
+async def cmd_genkey(message: Message, state: FSMContext):
+    await state.clear()  # important so it doesn't get stuck in activation state
+
     admin_ids = getattr(settings, "ADMIN_IDS", []) or []
+    # Support both list of ints and comma-separated string
+    if isinstance(admin_ids, str):
+        admin_ids = [x.strip() for x in admin_ids.split(",") if x.strip()]
+
     if str(message.from_user.id) not in [str(x) for x in admin_ids]:
-        return  # silent ignore
+        await message.answer("Unauthorized.")
+        return
 
     try:
         key = await create_license_key(message.from_user.id)
