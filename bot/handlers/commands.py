@@ -16,13 +16,10 @@ router = Router()
 
 
 async def _require_license(message: Message) -> bool:
-    """Return True if user is activated, otherwise send locked message and return False."""
     if await is_user_activated(message.from_user.id):
         return True
     await message.answer(
-        "🔒 <b>Access Locked</b>\n\n"
-        "You need an active license to use this feature.\n\n"
-        "Use /start to activate your license.",
+        "🔒 ShadowSnipe license is not active.",
         parse_mode="HTML"
     )
     return False
