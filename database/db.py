@@ -13,7 +13,32 @@ logger = logging.getLogger(__name__)
 DB_PATH = "brainrot.db"
 
 
-async def init_db() -> None:
+async def init_db(        # ══════════════════════════════════════════════════════════════════════
+        # LICENSE & ACTIVATION SYSTEM
+        # ══════════════════════════════════════════════════════════════════════
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS license_keys (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_code    TEXT    NOT NULL UNIQUE,
+                created_by  INTEGER,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_used     INTEGER DEFAULT 0,
+                used_by     INTEGER,
+                used_at     TIMESTAMP
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_activations (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id             INTEGER NOT NULL UNIQUE,
+                license_key         TEXT    NOT NULL,
+                payment_signature   TEXT,
+                activated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active           INTEGER DEFAULT 1
+            )
+        """)) -> None:
     """
     Creates all required tables if they don't already exist.
     Safe to run on every startup — uses CREATE TABLE IF NOT EXISTS.
