@@ -13,7 +13,25 @@ logger = logging.getLogger(__name__)
 DB_PATH = "brainrot.db"
 
 
-async def init_db(        # ══════════════════════════════════════════════════════════════════════
+async def init_db() -> None:
+    """
+    Creates all required tables if they don't already exist.
+    Safe to run on every startup — uses CREATE TABLE IF NOT EXISTS.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        async def _migrate(sql: str) -> None:
+            """
+            Best-effort data migration for existing installs.
+            Skipped silently when the table does not exist yet — on a fresh
+            database there is nothing to migrate.
+            """
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass
+
+        # ══════════════════════════════════════════════════════════════════════
         # LICENSE & ACTIVATION SYSTEM
         # ══════════════════════════════════════════════════════════════════════
 
@@ -38,23 +56,7 @@ async def init_db(        # ═════════════════�
                 activated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_active           INTEGER DEFAULT 1
             )
-        """)) -> None:
-    """
-    Creates all required tables if they don't already exist.
-    Safe to run on every startup — uses CREATE TABLE IF NOT EXISTS.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-
-        async def _migrate(sql: str) -> None:
-            """
-            Best-effort data migration for existing installs.
-            Skipped silently when the table does not exist yet — on a fresh
-            database there is nothing to migrate.
-            """
-            try:
-                await db.execute(sql)
-            except Exception:
-                pass
+        """)
 
         # ══════════════════════════════════════════════════════════════════════
         # LEGACY RAID CENTER TABLES (admin-created raids)
