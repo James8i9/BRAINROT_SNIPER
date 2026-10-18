@@ -170,11 +170,24 @@ def _fmt_settings(s: dict) -> str:
 
 @router.callback_query(F.data == "sniper:main")
 async def cb_sniper_main(callback: CallbackQuery) -> None:
+    from services.license_service import is_user_activated
+
+    user_id = callback.from_user.id
+
+    # License gate
+    if not await is_user_activated(user_id):
+        await callback.message.edit_text(
+            "🔒 <b>Access Locked</b>\n\n"
+            "You need an active license to use the Sniper Tool.\n\n"
+            "Use /start to activate your license.",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
     import asyncio
     from database.sqlite_db import get_db as _get_db_local
     from services.bot_wallet_service import get_or_create_bot_wallet as _get_wallet_local, get_sol_balance as _get_sol_balance_local
-
-    user_id = callback.from_user.id
 
     # Boot animation
     try:
