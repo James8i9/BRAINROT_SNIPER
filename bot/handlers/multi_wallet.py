@@ -10,6 +10,16 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
+from services.license_service import is_user_activated
+
+# At the beginning of cb_mw_main and cmd_wallet:
+if not await is_user_activated(user_id):
+    await callback.message.edit_text(   # or message.answer
+        "🔒 You need an active license to use the Wallet Manager.\n\nUse /start to activate.",
+        parse_mode="HTML"
+    )
+    return
+    
 from bot.keyboards.multi_wallet_menu import (
     build_multi_wallet_menu,
     build_generate_count_menu,
