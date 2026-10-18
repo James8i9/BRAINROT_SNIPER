@@ -21,6 +21,7 @@ from aiogram.types import BotCommand
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
 from bot.handlers import start, help, menu, callbacks
+from bot.handlers import activation
 from bot.handlers import admin_user      # Admin user management + /myid
 from bot.handlers import sniper          # Sniper Tool
 from bot.handlers import auto_exit       # Auto-Exit Manager
@@ -74,6 +75,7 @@ async def main() -> None:
 
     # ── Routers ────────────────────────────────────────────────────────────────
     # Order matters: more specific routers must come before the catch-all callbacks router.
+    dp.include_router(activation.router)
     dp.include_router(start.router)
     dp.include_router(commands.router)
     dp.include_router(menu.router)
