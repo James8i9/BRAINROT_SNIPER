@@ -83,7 +83,7 @@ async def cb_mw_main(callback: CallbackQuery, state: FSMContext) -> None:
     # License check
     if not await is_user_activated(user_id):
         await callback.message.edit_text(
-            "🔒 You need an active license to use the Wallet Manager.\n\nUse /start to activate.",
+            "🔒 ShadowSnipe license is not active.",
             parse_mode="HTML"
         )
         await callback.answer()
@@ -104,7 +104,7 @@ async def cb_mw_main(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_import_fund(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     if not await is_user_activated(user_id):
-        await callback.answer("License required", show_alert=True)
+        await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
         return
 
     await state.set_state(MultiWalletStates.waiting_for_fund_key)
@@ -155,7 +155,7 @@ async def process_fund_key(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "mw:generate")
 async def cb_generate(callback: CallbackQuery) -> None:
     if not await is_user_activated(callback.from_user.id):
-        await callback.answer("License required", show_alert=True)
+        await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
         return
 
     await callback.message.edit_text(
@@ -194,7 +194,7 @@ async def cb_generate_count(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "mw:list")
 async def cb_list_wallets(callback: CallbackQuery) -> None:
     if not await is_user_activated(callback.from_user.id):
-        await callback.answer("License required", show_alert=True)
+        await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
         return
 
     text = await _build_wallet_overview(callback.from_user.id)
@@ -212,7 +212,7 @@ async def cb_distribute(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
     if not await is_user_activated(user_id):
-        await callback.answer("License required", show_alert=True)
+        await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
         return
 
     fund = await get_fund_wallet(user_id)
