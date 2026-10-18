@@ -176,12 +176,12 @@ async def cb_sniper_main(callback: CallbackQuery) -> None:
 
     # License gate
     if not await is_user_activated(user_id):
-    await callback.message.edit_text(
-        "🔒 ShadowSnipe license is not active.",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-    return
+        await callback.message.edit_text(
+            "🔒 ShadowSnipe license is not active.",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
 
     import asyncio
     from database.sqlite_db import get_db as _get_db_local
