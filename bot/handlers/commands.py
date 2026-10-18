@@ -2,20 +2,37 @@
 bot/handlers/commands.py
 ========================
 Handles the slash commands shown in the Telegram menu.
+All important commands are gated behind license activation.
 """
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.keyboards.multi_wallet_menu import build_multi_wallet_menu
-from bot.keyboards.main_menu import build_main_menu
+from services.license_service import is_user_activated
 
 router = Router()
 
 
+async def _require_license(message: Message) -> bool:
+    """Return True if user is activated, otherwise send locked message and return False."""
+    if await is_user_activated(message.from_user.id):
+        return True
+    await message.answer(
+        "🔒 <b>Access Locked</b>\n\n"
+        "You need an active license to use this feature.\n\n"
+        "Use /start to activate your license.",
+        parse_mode="HTML"
+    )
+    return False
+
+
 @router.message(Command("wallet"))
 async def cmd_wallet(message: Message):
+    if not await _require_license(message):
+        return
+
     await message.answer(
         "💼 <b>Multi-Wallet Manager</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -29,9 +46,9 @@ async def cmd_wallet(message: Message):
 
 @router.message(Command("sniper"))
 async def cmd_sniper(message: Message):
-    # Re-use the existing sniper main callback logic if possible
-    # For now just send a message that opens the sniper
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    if not await _require_license(message):
+        return
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎯 Open Sniper Tool", callback_data="sniper:main")]
     ])
@@ -40,7 +57,9 @@ async def cmd_sniper(message: Message):
 
 @router.message(Command("copy"))
 async def cmd_copy(message: Message):
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    if not await _require_license(message):
+        return
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Open Copy Trade", callback_data="ct:main")]
     ])
@@ -49,26 +68,10 @@ async def cmd_copy(message: Message):
 
 @router.message(Command("candle"))
 async def cmd_candle(message: Message):
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    if not await _require_license(message):
+        return
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🕯️ Open Candle Sniper", callback_data="cs:main")]
     ])
     await message.answer("🕯️ <b>Candle Sniper</b>", reply_markup=kb, parse_mode="HTML")
-
-
-@router.message(Command("portfolio"))
-async def cmd_portfolio(message: Message):
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📈 View Portfolio", callback_data="menu:portfolio_guide")]
-    ])
-    await message.answer("📈 <b>Portfolio</b>", reply_markup=kb, parse_mode="HTML")
-
-
-@router.message(Command("profile"))
-async def cmd_profile(message: Message):
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Open Profile", callback_data="profile:main")]
-    ])
-    await message.answer("👤 <b>Profile</b>", reply_markup=kb, parse_mode="HTML")
