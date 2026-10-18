@@ -17,33 +17,28 @@ router = Router()
 _BOOT_FRAMES = [
     (
         "<code>█░░░░░░░░░ INITIALIZING...</code>\n\n"
-        "⚡ <b>$BRAINROT ALPHA BOT</b>\n"
+        "⚡ <b>SHADOWSNIPE BOT</b>\n"
         "<code>[ CONNECTING TO SOLANA ]</code>"
     ),
     (
         "<code>████░░░░░░ LOADING MODULES...</code>\n\n"
-        "⚡ <b>$BRAINROT ALPHA BOT</b>\n"
+        "⚡ <b>SHADOWSNIPE BOT</b>\n"
         "<code>[ SYNCING CHAIN DATA   ]</code>"
     ),
     (
         "<code>██████████ ONLINE</code>\n\n"
-        "⚡ <b>$BRAINROT ALPHA BOT</b>\n"
+        "⚡ <b>SHADOWSNIPE BOT</b>\n"
         "<code>[ ALL SYSTEMS NOMINAL  ]</code>"
     ),
 ]
 
 WELCOME_TEXT = (
-    "⚡ <b>$BRAINROT ALPHA BOT</b>\n"
-    "<code>▓▓▓▓▓▓▓▓▓▓  ONLINE  //  SOLANA</code>\n\n"
-    "🎯  <b>SNIPER TOOL</b>\n"
-    "<i>Auto-buy new tokens on launch detection</i>\n\n"
-    "📋  <b>COPY TRADE</b>\n"
-    "<i>Mirror smart-money wallets in real time</i>\n\n"
-    "🕯️  <b>CANDLE SNIPER</b>\n"
-    "<i>Pattern + surge signal entries &amp; exits</i>\n\n"
-    "👁  <b>WATCHLIST</b>\n"
-    "<i>Price alerts + quick buy on targets</i>\n\n"
-    f"<code>$BRAINROT  ·  {settings.BRAND_HANDLE}</code>\n\n"
+    "⚡ <b>SHADOWSNIPE</b>\n"
+    "<code>ONLINE  //  SOLANA</code>\n\n"
+    "🎯 <b>Sniper Tool</b> — Auto-buy on launch\n"
+    "📋 <b>Copy Trade</b> — Mirror smart wallets\n"
+    "🕯️ <b>Candle Sniper</b> — Pattern entries\n"
+    "💼 <b>Multi-Wallet</b> — Fund + Buy + Distribute\n\n"
     "<i>Select a module below.</i>"
 )
 
