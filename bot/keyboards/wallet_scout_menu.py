@@ -6,7 +6,6 @@ Keyboards for the Wallet Scout module.
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from bot.keyboards.share_templates import WALLET_SCOUT_SHARE_URL
 
 
 def build_wallet_scout_main() -> InlineKeyboardMarkup:
@@ -27,9 +26,6 @@ def build_wallet_scout_main() -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="🌊 GMGN TOKEN FEED",        callback_data="ws:feed"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="🐦  SHARE ON X / TWITTER",   url=WALLET_SCOUT_SHARE_URL),
     )
     builder.row(
         InlineKeyboardButton(text="⬅️  BACK",                  callback_data="menu:back"),
