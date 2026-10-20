@@ -6,28 +6,13 @@ All inline keyboards for the Sniper Tool module.
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from bot.keyboards.share_templates import (
-    SNIPER_SHARE_URL,
-    SHARE_TWITTER_URL,
-    SHARE_TELEGRAM_URL,
-    SHARE_REDDIT_URL,
-    SHARE_HASHTAG_URL,
-)
 
 
 def build_share_menu() -> InlineKeyboardMarkup:
-    """Universal community share menu accessible from Presets."""
+    """Share menu stub (share_templates removed)."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="🐦 POST ON X",           url=SHARE_TWITTER_URL),
-        InlineKeyboardButton(text="✈️ SHARE TO TELEGRAM",   url=SHARE_TELEGRAM_URL),
-    )
-    builder.row(
-        InlineKeyboardButton(text="🟠 POST TO REDDIT",      url=SHARE_REDDIT_URL),
-        InlineKeyboardButton(text="# COMMUNITY HASHTAG",    url=SHARE_HASHTAG_URL),
-    )
-    builder.row(
-        InlineKeyboardButton(text="⬅️  BACK TO PRESETS",    callback_data="sniper:presets"),
+        InlineKeyboardButton(text="⬅️  BACK TO PRESETS", callback_data="sniper:presets"),
     )
     return builder.as_markup()
 
@@ -128,8 +113,6 @@ def build_settings_menu(s: dict) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="⬅️  BACK", callback_data="sniper:main"))
     return builder.as_markup()
 
-
-_TWITTER_HASHTAG_URL = "https://x.com/hashtag/BRAINROTALPHABOTPRESET"
 
 def build_presets_list(presets: list[dict]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
