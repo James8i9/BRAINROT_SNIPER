@@ -20,7 +20,6 @@ from database.db import init_db
 from aiogram.types import BotCommand
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
-from bot.handlers import start, help, menu, callbacks
 from bot.handlers import activation
 from bot.handlers import admin_user      # Admin user management + /myid
 from bot.handlers import sniper          # Sniper Tool
