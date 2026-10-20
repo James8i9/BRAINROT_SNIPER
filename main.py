@@ -26,7 +26,6 @@ from bot.handlers import admin_user      # Admin user management + /myid
 from bot.handlers import sniper          # Sniper Tool
 from bot.handlers import auto_exit       # Auto-Exit Manager
 from bot.handlers import copy_trade      # ct:* Copy Trading
-from bot.handlers import wallet_scout    # ws:* Wallet Scout (Dragon mechanics)
 from bot.handlers import candle_sniper   # cs:* Candle Sniper strategy
 from bot.handlers import multi_wallet   # Multi-Wallet Manager
 
