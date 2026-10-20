@@ -50,11 +50,4 @@ def watchlist_section_wip(section: str) -> str:
     names = {"tokens": "TOKEN TRACKER", "wallets": "WALLET LIST", "dev_radar": "DEV RADAR", "templates": "SHARE TEMPLATES"}
     icon = icons.get(section, "👁")
     name = names.get(section, section.upper())
-    return (
-        f"{icon} <b>{name}</b>\n"
-        "<code>━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        "This section is being built.\n\n"
-        "<code>COMING SOON\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
-        "<i>Go back to the Watchlist dashboard.</i>"
-    )
+   
