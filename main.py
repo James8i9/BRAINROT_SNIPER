@@ -76,7 +76,6 @@ async def main() -> None:
     # ── Routers ────────────────────────────────────────────────────────────────
     # Order matters: more specific routers must come before the catch-all callbacks router.
     dp.include_router(activation.router)
-    dp.include_router(start.router)
     dp.include_router(commands.router)
     dp.include_router(menu.router)
     dp.include_router(admin_user.router)    # /myid /adminuser /admingrant etc
