@@ -8,7 +8,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from services.copy_trade_service import MAX_WALLETS
-from bot.keyboards.share_templates import COPY_TRADE_SHARE_URL
 
 
 def build_copy_trade_main(s: dict, wallet_count: int) -> InlineKeyboardMarkup:
@@ -33,7 +32,6 @@ def build_copy_trade_main(s: dict, wallet_count: int) -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(text="📋  TRADE HISTORY",      callback_data="ct:history"),
-        InlineKeyboardButton(text="🐦  SHARE ON X",         url=COPY_TRADE_SHARE_URL),
     )
 
     builder.row(
@@ -41,8 +39,6 @@ def build_copy_trade_main(s: dict, wallet_count: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="✅ WHITELIST", callback_data="ct:whitelist"),
     )
 
-    builder.row(
-    )
     builder.row(
         InlineKeyboardButton(text="⬅️  BACK",              callback_data="menu:back"),
     )
