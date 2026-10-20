@@ -75,9 +75,8 @@ async def handle_start(message: Message, state: FSMContext):
 async def cb_have_license(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_license_key)
     await callback.message.edit_text(
-        "🔑 <b>Enter your License Key</b>\n\n"
-        "Please send your license key now.\n"
-        "Format example: <code>6H16K-J6LB6-ZK8U1-CWP1</code>",
+        "🔐 <b>LICENSE ACCESS</b>\n\n"
+        "Enter your ShadowSnipe license key to continue.",
         parse_mode="HTML"
     )
     await callback.answer()
