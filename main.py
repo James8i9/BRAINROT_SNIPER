@@ -20,13 +20,15 @@ from database.db import init_db
 from aiogram.types import BotCommand
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
+from bot.handlers import menu, callbacks
 from bot.handlers import activation
 from bot.handlers import admin_user      # Admin user management + /myid
 from bot.handlers import sniper          # Sniper Tool
 from bot.handlers import auto_exit       # Auto-Exit Manager
 from bot.handlers import copy_trade      # ct:* Copy Trading
+from bot.handlers import wallet_scout    # ws:* Wallet Scout
 from bot.handlers import candle_sniper   # cs:* Candle Sniper strategy
-from bot.handlers import multi_wallet   # Multi-Wallet Manager
+from bot.handlers import multi_wallet    # Multi-Wallet Manager
 
 # ── Services ───────────────────────────────────────────────────────────────────
 from services.pumpportal_ws_service import pump_service
@@ -54,8 +56,6 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-   # ↓↓↓ PUT THE COMMANDS HERE (inside the main function) ↓↓↓
-    from aiogram.types import BotCommand
     await bot.set_my_commands([
         BotCommand(command="start",     description="Open the bot"),
         BotCommand(command="wallet",    description="Multi-Wallet Manager"),
@@ -63,7 +63,6 @@ async def main() -> None:
         BotCommand(command="copy",      description="Copy Trade"),
         BotCommand(command="candle",    description="Candle Sniper"),
     ])
-    # ↑↑↑ END OF COMMANDS ↑↑↑
 
     dp = Dispatcher(storage=SQLiteStorage())
 
@@ -76,22 +75,21 @@ async def main() -> None:
     dp.include_router(activation.router)
     dp.include_router(commands.router)
     dp.include_router(menu.router)
-    dp.include_router(admin_user.router)    # /myid /adminuser /admingrant etc
+    dp.include_router(admin_user.router)     # /myid /adminuser /admingrant etc
     dp.include_router(multi_wallet.router)   # mw:* Multi-Wallet Manager
     dp.include_router(auto_exit.router)      # ae:*      callbacks + FSM
     dp.include_router(sniper.router)         # sniper:*  callbacks + FSM
     dp.include_router(copy_trade.router)     # ct:*      callbacks + FSM
     dp.include_router(wallet_scout.router)   # ws:*      callbacks + FSM
-    dp.include_router(candle_sniper.router)  # cs:*      callbacks + FSM (/candle_sniper)
+    dp.include_router(candle_sniper.router)  # cs:*      callbacks + FSM
     dp.include_router(callbacks.router)      # menu:*    callbacks (last)
 
     # ── Startup Log ────────────────────────────────────────────────────────────
     bot_info = await bot.get_me()
     logger.info("=" * 54)
-    logger.info("  Telegram Solana Trading Bot")
+    logger.info("  ShadowSnipe — Solana Trading Bot")
     logger.info(f"  Bot     : @{bot_info.username}  (ID: {bot_info.id})")
     logger.info(f"  Admins  : {settings.ADMIN_IDS or 'none configured'}")
-    logger.info(f"  AutoApprove Raids : {settings.RAID_AUTO_APPROVE}")
     logger.info("=" * 54)
 
     # ── Background Tasks ───────────────────────────────────────────────────────
@@ -101,7 +99,7 @@ async def main() -> None:
     ct_task = asyncio.create_task(copy_trade_worker.start(bot))
     wd_task = asyncio.create_task(wallet_discovery_worker.start(bot))
     cs_task = asyncio.create_task(candle_sniper_worker.start(bot))
-    wa_task  = asyncio.create_task(watch_alert_worker.start(bot))
+    wa_task = asyncio.create_task(watch_alert_worker.start(bot))
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
