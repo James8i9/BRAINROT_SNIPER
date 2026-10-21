@@ -27,7 +27,6 @@ from bot.handlers import sniper          # Sniper Tool
 from bot.handlers import auto_exit       # Auto-Exit Manager
 from bot.handlers import copy_trade      # ct:* Copy Trading
 from bot.handlers import wallet_scout    # ws:* Wallet Scout
-from bot.handlers import candle_sniper   # cs:* Candle Sniper strategy
 from bot.handlers import multi_wallet    # Multi-Wallet Manager
 
 # ── Services ───────────────────────────────────────────────────────────────────
@@ -37,7 +36,6 @@ import services.auto_buy_worker as auto_buy_worker
 import services.auto_exit_worker as auto_exit_worker
 import services.copy_trade_worker as copy_trade_worker
 import services.wallet_discovery_worker as wallet_discovery_worker
-import services.candle_sniper_worker as candle_sniper_worker
 import services.watch_alert_worker as watch_alert_worker
 
 
@@ -61,7 +59,6 @@ async def main() -> None:
         BotCommand(command="wallet",    description="Multi-Wallet Manager"),
         BotCommand(command="sniper",    description="Sniper Tool"),
         BotCommand(command="copy",      description="Copy Trade"),
-        BotCommand(command="candle",    description="Candle Sniper"),
     ])
 
     dp = Dispatcher(storage=SQLiteStorage())
@@ -81,7 +78,6 @@ async def main() -> None:
     dp.include_router(sniper.router)         # sniper:*  callbacks + FSM
     dp.include_router(copy_trade.router)     # ct:*      callbacks + FSM
     dp.include_router(wallet_scout.router)   # ws:*      callbacks + FSM
-    dp.include_router(candle_sniper.router)  # cs:*      callbacks + FSM
     dp.include_router(callbacks.router)      # menu:*    callbacks (last)
 
     # ── Startup Log ────────────────────────────────────────────────────────────
@@ -98,7 +94,6 @@ async def main() -> None:
     ae_task = asyncio.create_task(auto_exit_worker.start(bot))
     ct_task = asyncio.create_task(copy_trade_worker.start(bot))
     wd_task = asyncio.create_task(wallet_discovery_worker.start(bot))
-    cs_task = asyncio.create_task(candle_sniper_worker.start(bot))
     wa_task = asyncio.create_task(watch_alert_worker.start(bot))
 
     try:
@@ -109,14 +104,12 @@ async def main() -> None:
         auto_exit_worker.stop()
         copy_trade_worker.stop()
         wallet_discovery_worker.stop()
-        candle_sniper_worker.stop()
         watch_alert_worker.stop()
         ws_task.cancel()
         ab_task.cancel()
         ae_task.cancel()
         ct_task.cancel()
         wd_task.cancel()
-        cs_task.cancel()
         wa_task.cancel()
         await bot.session.close()
         logger.info("Bot shut down cleanly.")
