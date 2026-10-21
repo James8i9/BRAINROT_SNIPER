@@ -24,9 +24,6 @@ def build_main_menu() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="📋  COPY TRADE", callback_data="ct:main"),
     )
-    builder.row(
-        InlineKeyboardButton(text="🕯️  CANDLE SNIPER", callback_data="cs:main"),
-    )
 
     return builder.as_markup()
 
