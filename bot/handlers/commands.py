@@ -61,14 +61,3 @@ async def cmd_copy(message: Message):
         [InlineKeyboardButton(text="📋 Open Copy Trade", callback_data="ct:main")]
     ])
     await message.answer("📋 <b>Copy Trade</b>", reply_markup=kb, parse_mode="HTML")
-
-
-@router.message(Command("candle"))
-async def cmd_candle(message: Message):
-    if not await _require_license(message):
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🕯️ Open Candle Sniper", callback_data="cs:main")]
-    ])
-    await message.answer("🕯️ <b>Candle Sniper</b>", reply_markup=kb, parse_mode="HTML")
