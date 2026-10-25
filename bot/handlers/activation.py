@@ -45,8 +45,6 @@ def _network_hint() -> str:
     return f"Solana <b>{net}</b> (test SOL — not real money)"
 
 
-# ── Keyboards ─────────────────────────────────────────────────────────────────
-
 def _welcome_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="☠️  VIEW ACCESS PLAN", callback_data="act:view_plan")],
@@ -72,8 +70,6 @@ def _plans_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="◀️  BACK", callback_data="act:back_start")],
     ])
 
-
-# ── Text content ──────────────────────────────────────────────────────────────
 
 WELCOME_TEXT = (
     "⚡ <b>WELCOME TO ShadowSnipe</b> 🎯\n\n"
@@ -109,67 +105,77 @@ PLANS_TEXT = (
 )
 
 
-# ── /start ────────────────────────────────────────────────────────────────────
 @router.message(CommandStart())
 async def handle_start(message: Message, state: FSMContext):
-    await state.clear()
-    user_id = message.from_user.id
+    try:
+        try:
+            await state.clear()
+        except Exception as e:
+            logger.warning(f"state.clear failed on /start: {e}")
 
-    if await is_user_activated(user_id):
+        user_id = message.from_user.id
+
+        if await is_user_activated(user_id):
+            await message.answer(
+                "⚡ <b>SHADOWSNIPE</b>\n"
+                "<code>ONLINE  //  SOLANA</code>\n\n"
+                "Your license is active.\n"
+                "Select a module below.",
+                reply_markup=build_main_menu(),
+                parse_mode="HTML",
+            )
+            return
+
         await message.answer(
-            "⚡ <b>SHADOWSNIPE</b>\n"
-            "<code>ONLINE  //  SOLANA</code>\n\n"
-            "Your license is active.\n"
-            "Select a module below.",
-            reply_markup=build_main_menu(),
-            parse_mode="HTML"
+            WELCOME_TEXT,
+            reply_markup=_welcome_keyboard(),
+            parse_mode="HTML",
         )
-        return
+    except Exception as e:
+        logger.exception(f"/start failed for user={message.from_user.id}: {e}")
+        try:
+            await message.answer(
+                "⚡ <b>ShadowSnipe</b> is online.\n\n"
+                "Something went wrong loading your session — try /start again.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
-    await message.answer(
-        WELCOME_TEXT,
-        reply_markup=_welcome_keyboard(),
-        parse_mode="HTML"
-    )
 
-
-# ── VIEW ACCESS PLAN → Referral screen ────────────────────────────────────────
 @router.callback_query(F.data == "act:view_plan")
 async def cb_view_plan(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_referral_code)
     await callback.message.edit_text(
         REFERRAL_TEXT,
         reply_markup=_referral_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()
 
 
-# ── SKIP — VIEW PLANS → Pricing screen ────────────────────────────────────────
 @router.callback_query(F.data == "act:skip_plans")
 async def cb_skip_plans(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
         PLANS_TEXT,
         reply_markup=_plans_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()
 
 
-# ── BACK → Start ──────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "act:back_start")
 async def cb_back_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
         WELCOME_TEXT,
         reply_markup=_welcome_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()
 
 
-# ── Plan selected ─────────────────────────────────────────────────────────────
 @router.callback_query(F.data.startswith("act:plan:"))
 async def cb_plan_selected(callback: CallbackQuery, state: FSMContext):
     plan = callback.data.split(":")[-1]
@@ -188,11 +194,10 @@ async def cb_plan_selected(callback: CallbackQuery, state: FSMContext):
         "🔐 <b>LICENSE ACCESS</b>\n\n"
         "Enter your ShadowSnipe license key to continue.\n\n"
         "<i>Each key works for one Telegram account only.</i>",
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
-# ── Button: I HAVE A LICENSE ──────────────────────────────────────────────────
 @router.callback_query(F.data == "act:have_license")
 async def cb_have_license(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_license_key)
@@ -200,12 +205,11 @@ async def cb_have_license(callback: CallbackQuery, state: FSMContext):
         "🔐 <b>LICENSE ACCESS</b>\n\n"
         "Enter your ShadowSnipe license key to continue.\n\n"
         "<i>Each key works for one Telegram account only.</i>",
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     await callback.answer()
 
 
-# ── Referral code typed ───────────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_referral_code)
 async def process_referral_code(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
@@ -216,18 +220,17 @@ async def process_referral_code(message: Message, state: FSMContext):
         await state.update_data(referral_code=code)
         await message.answer(
             f"✅ Referral code <code>{code}</code> noted.\n\nShowing plans…",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
 
     await state.clear()
     await message.answer(
         PLANS_TEXT,
         reply_markup=_plans_keyboard(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
-# ── License key received ──────────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_license_key)
 async def process_license_key(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
@@ -248,12 +251,6 @@ async def process_license_key(message: Message, state: FSMContext):
     amount = getattr(settings, "ACTIVATION_AMOUNT_SOL", 1.0)
     network = activation_network_label()
 
-    explorer = {
-        "mainnet": "https://solscan.io/tx/",
-        "devnet":  "https://solscan.io/tx/",
-        "testnet": "https://solscan.io/tx/",
-    }.get(network, "https://solscan.io/tx/")
-
     await message.answer(
         f"✅ <b>License key accepted</b>\n"
         f"<i>This key will be locked to your Telegram account after payment.</i>\n\n"
@@ -262,12 +259,11 @@ async def process_license_key(message: Message, state: FSMContext):
         f"Send exactly <b>{amount} SOL</b> to:\n"
         f"<code>{wallet}</code>\n\n"
         f"After sending, reply with the <b>transaction signature</b>.\n"
-        f"<i>(Explorer: {explorer}<signature> — use the {network} cluster)</i>",
-        parse_mode="HTML"
+        f"<i>Use the {network} cluster when checking the explorer.</i>",
+        parse_mode="HTML",
     )
 
 
-# ── Payment signature received ────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_payment_signature)
 async def process_payment_signature(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
@@ -283,7 +279,6 @@ async def process_payment_signature(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Re-validate before payment (race: another account shouldn't steal the key)
     check = await validate_key_for_user(license_key, user_id)
     if not check["ok"]:
         await message.answer(f"❌ {check['error']}\n\nUse /start to begin again.")
@@ -300,7 +295,7 @@ async def process_payment_signature(message: Message, state: FSMContext):
             f"❌ Payment verification failed.\n\n"
             f"<code>{result.get('error')}</code>\n\n"
             f"Make sure you paid on <b>{network}</b> and paste the correct signature.",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
         return
 
@@ -320,14 +315,13 @@ async def process_payment_signature(message: Message, state: FSMContext):
         "✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n"
         "✅ License verified\n"
         "✅ Payment confirmed\n"
-        f"✅ Key locked to your Telegram account\n\n"
+        "✅ Key locked to your Telegram account\n\n"
         "Your bot access is now enabled.\n\n"
         "Use /wallet to open Wallet Manager.",
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
-# ── Admin: Generate license keys ──────────────────────────────────────────────
 @router.message(Command("genkey"))
 async def cmd_genkey(message: Message, state: FSMContext):
     """
@@ -360,7 +354,7 @@ async def cmd_genkey(message: Message, state: FSMContext):
             f"<code>{key}</code>\n\n"
             f"{note}\n\n"
             f"Share this key with the user.",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
     except Exception as e:
         await message.answer(f"Failed to generate key: {e}")
