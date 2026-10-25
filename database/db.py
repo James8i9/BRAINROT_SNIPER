@@ -239,9 +239,11 @@ async def init_db() -> None:
                 token_address TEXT    NOT NULL,
                 status        TEXT    DEFAULT 'open',
                 entry_sol     REAL,
+                amount_sol    REAL,
                 created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await _migrate("ALTER TABLE tracked_positions ADD COLUMN amount_sol REAL")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS cached_token_data (
@@ -257,33 +259,78 @@ async def init_db() -> None:
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id              INTEGER NOT NULL UNIQUE,
                 enabled              INTEGER DEFAULT 0,
+                live_mode            INTEGER DEFAULT 1,
                 selected_preset_id   INTEGER,
+                notifications_enabled INTEGER DEFAULT 1,
+                custom_slippage      REAL DEFAULT 15.0,
                 custom_priority_fee  REAL DEFAULT 0.005,
                 updated_at           TIMESTAMP
             )
         """)
+        await _migrate("ALTER TABLE auto_exit_settings ADD COLUMN live_mode INTEGER DEFAULT 1")
+        await _migrate("ALTER TABLE auto_exit_settings ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
+        await _migrate("ALTER TABLE auto_exit_settings ADD COLUMN custom_slippage REAL DEFAULT 15.0")
 
+        # Full column layout required by seed_system_presets / clone_preset
         await db.execute("""
             CREATE TABLE IF NOT EXISTS exit_presets (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER,
-                name        TEXT NOT NULL,
-                is_system   INTEGER DEFAULT 0,
-                config_json TEXT NOT NULL,
-                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id              INTEGER,
+                name                 TEXT    NOT NULL,
+                description          TEXT    DEFAULT '',
+                is_system            INTEGER DEFAULT 0,
+                tp1_pct              REAL,
+                tp1_sell_pct         REAL,
+                tp2_pct              REAL,
+                tp2_sell_pct         REAL,
+                tp3_pct              REAL,
+                tp3_sell_pct         REAL,
+                moon_bag_pct         REAL    DEFAULT 0,
+                sl_pct               REAL,
+                trailing_stop_pct    REAL,
+                trailing_after_tp    INTEGER DEFAULT 1,
+                break_even_after_tp  INTEGER DEFAULT 1,
+                max_hold_minutes     INTEGER,
+                created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migrations for DBs that got the incomplete slim schema
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN description TEXT DEFAULT ''")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN tp1_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN tp1_sell_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN tp2_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN tp2_sell_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN tp3_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN tp3_sell_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN moon_bag_pct REAL DEFAULT 0")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN sl_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN trailing_stop_pct REAL")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN trailing_after_tp INTEGER DEFAULT 1")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN break_even_after_tp INTEGER DEFAULT 1")
+        await _migrate("ALTER TABLE exit_presets ADD COLUMN max_hold_minutes INTEGER")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS position_state (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id       INTEGER NOT NULL,
-                token_address TEXT NOT NULL,
-                status        TEXT DEFAULT 'open',
-                data_json     TEXT,
-                updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id        INTEGER,
+                user_id            INTEGER NOT NULL,
+                token_address      TEXT    NOT NULL,
+                entry_price_sol    REAL,
+                current_price_sol  REAL,
+                highest_price_sol  REAL,
+                preset_id          INTEGER,
+                status             TEXT    DEFAULT 'watching',
+                opened_at          TIMESTAMP,
+                data_json          TEXT,
+                updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await _migrate("ALTER TABLE position_state ADD COLUMN position_id INTEGER")
+        await _migrate("ALTER TABLE position_state ADD COLUMN entry_price_sol REAL")
+        await _migrate("ALTER TABLE position_state ADD COLUMN current_price_sol REAL")
+        await _migrate("ALTER TABLE position_state ADD COLUMN highest_price_sol REAL")
+        await _migrate("ALTER TABLE position_state ADD COLUMN preset_id INTEGER")
+        await _migrate("ALTER TABLE position_state ADD COLUMN opened_at TIMESTAMP")
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS position_events (
@@ -297,11 +344,11 @@ async def init_db() -> None:
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sell_executions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER,
-                signature   TEXT,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER,
+                signature     TEXT,
                 token_address TEXT,
-                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -320,49 +367,49 @@ async def init_db() -> None:
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS copy_trade_settings (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id       INTEGER NOT NULL UNIQUE,
-                enabled       INTEGER DEFAULT 0,
-                kill_switch   INTEGER DEFAULT 0,
-                copy_buys     INTEGER DEFAULT 1,
-                copy_sells    INTEGER DEFAULT 1,
-                fixed_amount_sol REAL DEFAULT 0.01,
-                slippage      REAL DEFAULT 15.0,
-                priority_fee  REAL DEFAULT 0.005,
-                updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id          INTEGER NOT NULL UNIQUE,
+                enabled          INTEGER DEFAULT 0,
+                kill_switch      INTEGER DEFAULT 0,
+                copy_buys        INTEGER DEFAULT 1,
+                copy_sells       INTEGER DEFAULT 1,
+                fixed_amount_sol REAL    DEFAULT 0.01,
+                slippage         REAL    DEFAULT 15.0,
+                priority_fee     REAL    DEFAULT 0.005,
+                updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS copy_trade_token_blacklist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                token_address TEXT NOT NULL,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                token_address TEXT    NOT NULL,
                 UNIQUE(user_id, token_address)
             )
         """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS copy_trade_token_whitelist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                token_address TEXT NOT NULL,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                token_address TEXT    NOT NULL,
                 UNIQUE(user_id, token_address)
             )
         """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS processed_copy_txs (
-                signature TEXT PRIMARY KEY,
+                signature    TEXT PRIMARY KEY,
                 processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS copy_trade_jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                status TEXT,
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER,
+                status     TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -370,40 +417,40 @@ async def init_db() -> None:
         # ── Wallet discovery / scout ──────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS discovered_wallets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wallet_address TEXT NOT NULL UNIQUE,
-                score REAL DEFAULT 0,
-                meta_json TEXT,
-                discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_address  TEXT NOT NULL UNIQUE,
+                score           REAL DEFAULT 0,
+                meta_json       TEXT,
+                discovered_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS wallet_preset_subscriptions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                preset_name TEXT NOT NULL,
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                preset_name TEXT    NOT NULL,
                 UNIQUE(user_id, preset_name)
             )
         """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS discovery_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 finished_at TIMESTAMP,
-                status TEXT
+                status      TEXT
             )
         """)
 
         # ── Bot wallets (encrypted) ───────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bot_wallets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL UNIQUE,
-                wallet_address TEXT NOT NULL,
-                encrypted_private_key TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id               INTEGER NOT NULL UNIQUE,
+                wallet_address        TEXT    NOT NULL,
+                encrypted_private_key TEXT    NOT NULL,
+                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
