@@ -1,8 +1,8 @@
 """
 bot/handlers/activation.py
 ==========================
-Guided license + payment activation flow
-+ Access Plan / referral / pricing screens
+Guided license + payment activation flow.
+Keys are single-use and bound to one Telegram account.
 """
 
 import logging
@@ -13,12 +13,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from services.license_service import (
-    get_license_key,
+    validate_key_for_user,
     mark_key_used,
     is_user_activated,
     activate_user,
     verify_payment_transaction,
     create_license_key,
+    activation_network_label,
 )
 from utils.config import settings
 from bot.keyboards.main_menu import build_main_menu
@@ -35,6 +36,13 @@ class ActivationStates(StatesGroup):
 
 def _activation_wallet() -> str:
     return getattr(settings, "ACTIVATION_WALLET", "NOT_CONFIGURED")
+
+
+def _network_hint() -> str:
+    net = activation_network_label()
+    if net == "mainnet":
+        return "Solana <b>mainnet</b>"
+    return f"Solana <b>{net}</b> (test SOL — not real money)"
 
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
@@ -149,7 +157,7 @@ async def cb_skip_plans(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ── BACK → Start (both options) ───────────────────────────────────────────────
+# ── BACK → Start ──────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "act:back_start")
 async def cb_back_start(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -161,7 +169,7 @@ async def cb_back_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ── Plan selected (show info, then route to license) ──────────────────────────
+# ── Plan selected ─────────────────────────────────────────────────────────────
 @router.callback_query(F.data.startswith("act:plan:"))
 async def cb_plan_selected(callback: CallbackQuery, state: FSMContext):
     plan = callback.data.split(":")[-1]
@@ -174,13 +182,12 @@ async def cb_plan_selected(callback: CallbackQuery, state: FSMContext):
     }
     label = labels.get(plan, plan)
     await callback.answer(f"Selected: {label}", show_alert=False)
-    # Move user into license entry so they can activate
     await state.set_state(ActivationStates.waiting_for_license_key)
     await callback.message.edit_text(
         f"✅ <b>Plan selected:</b> {label}\n\n"
         "🔐 <b>LICENSE ACCESS</b>\n\n"
         "Enter your ShadowSnipe license key to continue.\n\n"
-        "<i>Contact admin if you need a key for this plan.</i>",
+        "<i>Each key works for one Telegram account only.</i>",
         parse_mode="HTML"
     )
 
@@ -191,13 +198,14 @@ async def cb_have_license(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_license_key)
     await callback.message.edit_text(
         "🔐 <b>LICENSE ACCESS</b>\n\n"
-        "Enter your ShadowSnipe license key to continue.",
+        "Enter your ShadowSnipe license key to continue.\n\n"
+        "<i>Each key works for one Telegram account only.</i>",
         parse_mode="HTML"
     )
     await callback.answer()
 
 
-# ── Referral code typed (optional — just acknowledge and show plans) ──────────
+# ── Referral code typed ───────────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_referral_code)
 async def process_referral_code(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
@@ -225,15 +233,12 @@ async def process_license_key(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
         return
 
-    key = message.text.strip().upper()
-    record = await get_license_key(key)
+    key = (message.text or "").strip().upper()
+    user_id = message.from_user.id
 
-    if not record:
-        await message.answer("❌ Invalid license key. Please try again.")
-        return
-
-    if record["is_used"]:
-        await message.answer("❌ This license key has already been used.")
+    check = await validate_key_for_user(key, user_id)
+    if not check["ok"]:
+        await message.answer(f"❌ {check['error']}")
         return
 
     await state.update_data(license_key=key)
@@ -241,13 +246,23 @@ async def process_license_key(message: Message, state: FSMContext):
 
     wallet = _activation_wallet()
     amount = getattr(settings, "ACTIVATION_AMOUNT_SOL", 1.0)
+    network = activation_network_label()
+
+    explorer = {
+        "mainnet": "https://solscan.io/tx/",
+        "devnet":  "https://solscan.io/tx/",
+        "testnet": "https://solscan.io/tx/",
+    }.get(network, "https://solscan.io/tx/")
 
     await message.answer(
-        f"✅ <b>License key verified</b>\n\n"
-        f"Your activation fee is: <b>{amount} SOL</b>\n\n"
+        f"✅ <b>License key accepted</b>\n"
+        f"<i>This key will be locked to your Telegram account after payment.</i>\n\n"
+        f"Network: {_network_hint()}\n"
+        f"Activation fee: <b>{amount} SOL</b>\n\n"
         f"Send exactly <b>{amount} SOL</b> to:\n"
         f"<code>{wallet}</code>\n\n"
-        f"After sending the payment, reply with the <b>transaction signature</b>.",
+        f"After sending, reply with the <b>transaction signature</b>.\n"
+        f"<i>(Explorer: {explorer}<signature> — use the {network} cluster)</i>",
         parse_mode="HTML"
     )
 
@@ -258,16 +273,25 @@ async def process_payment_signature(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
         return
 
-    signature = message.text.strip()
+    signature = (message.text or "").strip()
     data = await state.get_data()
     license_key = data.get("license_key")
+    user_id = message.from_user.id
 
     if not license_key:
         await message.answer("Session expired. Please /start again.")
         await state.clear()
         return
 
-    await message.answer("⏳ Checking the transaction on Solana...")
+    # Re-validate before payment (race: another account shouldn't steal the key)
+    check = await validate_key_for_user(license_key, user_id)
+    if not check["ok"]:
+        await message.answer(f"❌ {check['error']}\n\nUse /start to begin again.")
+        await state.clear()
+        return
+
+    network = activation_network_label()
+    await message.answer(f"⏳ Checking the transaction on Solana <b>{network}</b>…", parse_mode="HTML")
 
     result = await verify_payment_transaction(signature)
 
@@ -275,13 +299,20 @@ async def process_payment_signature(message: Message, state: FSMContext):
         await message.answer(
             f"❌ Payment verification failed.\n\n"
             f"<code>{result.get('error')}</code>\n\n"
-            f"Please try again with a valid transaction signature.",
+            f"Make sure you paid on <b>{network}</b> and paste the correct signature.",
             parse_mode="HTML"
         )
         return
 
-    user_id = message.from_user.id
-    await mark_key_used(license_key, user_id)
+    bound = await mark_key_used(license_key, user_id)
+    if not bound:
+        await message.answer(
+            "❌ This license key was just claimed by another account. "
+            "Contact admin for a new key."
+        )
+        await state.clear()
+        return
+
     await activate_user(user_id, license_key, signature)
     await state.clear()
 
@@ -289,7 +320,7 @@ async def process_payment_signature(message: Message, state: FSMContext):
         "✅ <b>ACTIVATION SUCCESSFUL!</b>\n\n"
         "✅ License verified\n"
         "✅ Payment confirmed\n"
-        "✅ License activated\n\n"
+        f"✅ Key locked to your Telegram account\n\n"
         "Your bot access is now enabled.\n\n"
         "Use /wallet to open Wallet Manager.",
         parse_mode="HTML"
@@ -299,6 +330,10 @@ async def process_payment_signature(message: Message, state: FSMContext):
 # ── Admin: Generate license keys ──────────────────────────────────────────────
 @router.message(Command("genkey"))
 async def cmd_genkey(message: Message, state: FSMContext):
+    """
+    /genkey              — open key (first account to pay binds it)
+    /genkey <telegram_id> — key reserved for that Telegram user only
+    """
     await state.clear()
 
     admin_ids = getattr(settings, "ADMIN_IDS", []) or []
@@ -309,11 +344,21 @@ async def cmd_genkey(message: Message, state: FSMContext):
         await message.answer("Unauthorized.")
         return
 
+    parts = (message.text or "").split()
+    assigned_to = None
+    if len(parts) >= 2 and parts[1].isdigit():
+        assigned_to = int(parts[1])
+
     try:
-        key = await create_license_key(message.from_user.id)
+        key = await create_license_key(message.from_user.id, assigned_to=assigned_to)
+        if assigned_to:
+            note = f"Reserved for Telegram ID <code>{assigned_to}</code> only."
+        else:
+            note = "Open key — first account that completes payment locks it permanently."
         await message.answer(
-            f"🔑 <b>New License Key generated:</b>\n\n"
+            f"🔑 <b>New License Key:</b>\n\n"
             f"<code>{key}</code>\n\n"
+            f"{note}\n\n"
             f"Share this key with the user.",
             parse_mode="HTML"
         )
