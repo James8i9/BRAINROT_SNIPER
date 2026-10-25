@@ -6,18 +6,14 @@ Clean main menu — only the modules we actually use.
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from utils.config import settings
 
 
 def build_main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
-    # ── Wallet (Multi-Wallet Manager) ─────────────────────────────────────────
     builder.row(
         InlineKeyboardButton(text="💼  WALLET", callback_data="mw:main"),
     )
-
-    # ── Core Trading Modules ──────────────────────────────────────────────────
     builder.row(
         InlineKeyboardButton(text="🎯  SNIPER TOOL", callback_data="sniper:main"),
     )
@@ -25,18 +21,6 @@ def build_main_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📋  COPY TRADE", callback_data="ct:main"),
     )
 
-    return builder.as_markup()
-
-
-def build_watchlist_menu() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🪙 TOKENS",  callback_data="wl:tokens"),
-        InlineKeyboardButton(text="👛 WALLETS", callback_data="wl:wallets"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="⬅️  BACK", callback_data="menu:back"),
-    )
     return builder.as_markup()
 
 
