@@ -1,7 +1,14 @@
 """
 bot/handlers/activation.py
 ==========================
-Guided license + payment activation flow.
+Guided subscription + license + payment activation flow.
+
+Flow A — buy a plan:
+  select plan → pay plan amount (testnet/mainnet) → auto key → pay 1 SOL activate
+
+Flow B — already have a key:
+  enter key → pay 1 SOL activate
+
 Keys are single-use and bound to one Telegram account.
 """
 
@@ -27,15 +34,54 @@ from bot.keyboards.main_menu import build_main_menu
 logger = logging.getLogger(__name__)
 router = Router()
 
+# ── Plan catalog ───────────────────────────────────────────────────────────────
+PLANS = {
+    "1m": {
+        "title": "1 MONTH PLAN",
+        "amount": 9.25,
+        "days": 30,
+        "button": "💎  1 MONTH — 9.25 SOL",
+    },
+    "2m": {
+        "title": "2 MONTHS PLAN",
+        "amount": 20.25,
+        "days": 60,
+        "button": "⚡  2 MONTHS — 20.25 SOL",
+    },
+    "3m": {
+        "title": "3 MONTHS PLAN",
+        "amount": 30.25,
+        "days": 90,
+        "button": "🔥  3 MONTHS — 30.25 SOL",
+    },
+    "1y": {
+        "title": "1 YEAR PLAN",
+        "amount": 100.25,
+        "days": 365,
+        "button": "👑  1 YEAR — 100.25 SOL",
+    },
+    "master": {
+        "title": "MASTER PLAN",
+        "amount": 1000.25,
+        "days": None,  # lifetime
+        "button": "☠️  MASTER — 1000.25 SOL",
+    },
+}
+
 
 class ActivationStates(StatesGroup):
-    waiting_for_license_key = State()
-    waiting_for_payment_signature = State()
     waiting_for_referral_code = State()
+    waiting_for_plan_payment = State()      # subscription SOL payment
+    waiting_for_license_key = State()       # user already has a key
+    waiting_for_payment_signature = State() # 1 SOL activation fee
 
 
 def _activation_wallet() -> str:
-    return getattr(settings, "ACTIVATION_WALLET", "NOT_CONFIGURED")
+    return getattr(settings, "ACTIVATION_WALLET", "") or "NOT_CONFIGURED"
+
+
+def _activation_fee() -> float:
+    return float(getattr(settings, "ACTIVATION_AMOUNT_SOL", 1.0))
 
 
 def _network_hint() -> str:
@@ -60,15 +106,44 @@ def _referral_keyboard() -> InlineKeyboardMarkup:
 
 
 def _plans_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=p["button"], callback_data=f"act:plan:{pid}")]
+        for pid, p in PLANS.items()
+    ]
+    rows.append([InlineKeyboardButton(text="🔐  CONTINUE TO LICENSE", callback_data="act:have_license")])
+    rows.append([InlineKeyboardButton(text="◀️  BACK", callback_data="act:back_start")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _plan_pay_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎  1 MONTH — 9.25 SOL", callback_data="act:plan:1m")],
-        [InlineKeyboardButton(text="⚡  2 MONTHS — 20.25 SOL", callback_data="act:plan:2m")],
-        [InlineKeyboardButton(text="🔥  3 MONTHS — 30.25 SOL", callback_data="act:plan:3m")],
-        [InlineKeyboardButton(text="👑  1 YEAR — 100.25 SOL", callback_data="act:plan:1y")],
-        [InlineKeyboardButton(text="☠️  MASTER — 1000.25 SOL", callback_data="act:plan:master")],
-        [InlineKeyboardButton(text="🔐  CONTINUE TO LICENSE", callback_data="act:have_license")],
-        [InlineKeyboardButton(text="◀️  BACK", callback_data="act:back_start")],
+        [InlineKeyboardButton(text="◀️  BACK TO PLANS", callback_data="act:skip_plans")],
     ])
+
+
+def _subscription_text(plan_id: str) -> str:
+    plan = PLANS[plan_id]
+    wallet = _activation_wallet()
+    network = activation_network_label()
+    days_line = (
+        f"⏱  <b>{plan['days']} days</b>\n"
+        if plan["days"] is not None
+        else "⏱  <b>Lifetime access</b>\n"
+    )
+    return (
+        f"💎 <b>SHADOWSNIPE SUBSCRIPTION</b>\n\n"
+        f"<b>{plan['title']}</b>\n"
+        f"💵  <b>{plan['amount']} SOL</b>\n"
+        f"{days_line}\n"
+        f"Network: {_network_hint()}\n\n"
+        f"Send exactly <b>{plan['amount']} SOL</b> to:\n"
+        f"<code>{wallet}</code>\n\n"
+        f"After sending the payment, reply with the <b>transaction signature</b>.\n\n"
+        f"Once verified, ShadowSnipe will automatically generate your license key. "
+        f"You must then activate that key with the existing "
+        f"<b>{_activation_fee()} SOL</b> activation payment.\n\n"
+        f"<i>Use the {network} cluster when checking the explorer.</i>"
+    )
 
 
 WELCOME_TEXT = (
@@ -105,6 +180,7 @@ PLANS_TEXT = (
 )
 
 
+# ── /start ────────────────────────────────────────────────────────────────────
 @router.message(CommandStart())
 async def handle_start(message: Message, state: FSMContext):
     try:
@@ -143,6 +219,7 @@ async def handle_start(message: Message, state: FSMContext):
             pass
 
 
+# ── Navigation ─────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "act:view_plan")
 async def cb_view_plan(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_referral_code)
@@ -176,28 +253,106 @@ async def cb_back_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# ── Plan selected → subscription payment screen ────────────────────────────────
 @router.callback_query(F.data.startswith("act:plan:"))
 async def cb_plan_selected(callback: CallbackQuery, state: FSMContext):
-    plan = callback.data.split(":")[-1]
-    labels = {
-        "1m": "1 MONTH — 9.25 SOL",
-        "2m": "2 MONTHS — 20.25 SOL",
-        "3m": "3 MONTHS — 30.25 SOL",
-        "1y": "1 YEAR — 100.25 SOL",
-        "master": "MASTER — 1000.25 SOL",
-    }
-    label = labels.get(plan, plan)
-    await callback.answer(f"Selected: {label}", show_alert=False)
-    await state.set_state(ActivationStates.waiting_for_license_key)
+    plan_id = callback.data.split(":")[-1]
+    if plan_id not in PLANS:
+        await callback.answer("Unknown plan.", show_alert=True)
+        return
+
+    plan = PLANS[plan_id]
+    await state.set_state(ActivationStates.waiting_for_plan_payment)
+    await state.update_data(
+        plan_id=plan_id,
+        plan_amount=plan["amount"],
+        plan_title=plan["title"],
+    )
+
     await callback.message.edit_text(
-        f"✅ <b>Plan selected:</b> {label}\n\n"
-        "🔐 <b>LICENSE ACCESS</b>\n\n"
-        "Enter your ShadowSnipe license key to continue.\n\n"
-        "<i>Each key works for one Telegram account only.</i>",
+        _subscription_text(plan_id),
+        reply_markup=_plan_pay_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+# ── Plan payment signature ─────────────────────────────────────────────────────
+@router.message(ActivationStates.waiting_for_plan_payment)
+async def process_plan_payment(message: Message, state: FSMContext):
+    if message.text and message.text.startswith("/"):
+        return
+
+    signature = (message.text or "").strip()
+    data = await state.get_data()
+    plan_id = data.get("plan_id")
+    plan_amount = data.get("plan_amount")
+    plan_title = data.get("plan_title", "PLAN")
+    user_id = message.from_user.id
+
+    if not plan_id or plan_amount is None:
+        await message.answer("Session expired. Please /start again.")
+        await state.clear()
+        return
+
+    if await is_user_activated(user_id):
+        await message.answer("This Telegram account is already activated.")
+        await state.clear()
+        return
+
+    network = activation_network_label()
+    await message.answer(
+        f"⏳ Checking your <b>{plan_title}</b> payment on Solana <b>{network}</b>…",
+        parse_mode="HTML",
+    )
+
+    result = await verify_payment_transaction(signature, required_sol=float(plan_amount))
+
+    if not result["valid"]:
+        await message.answer(
+            f"❌ Payment verification failed.\n\n"
+            f"<code>{result.get('error')}</code>\n\n"
+            f"Send exactly <b>{plan_amount} SOL</b> on <b>{network}</b> "
+            f"and paste the correct signature.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Auto-generate a key reserved for this Telegram account
+    try:
+        key = await create_license_key(created_by=user_id, assigned_to=user_id)
+    except Exception as e:
+        logger.exception(f"Auto key gen failed for user={user_id}: {e}")
+        await message.answer(
+            "Payment verified, but license key generation failed. Contact admin."
+        )
+        return
+
+    fee = _activation_fee()
+    wallet = _activation_wallet()
+
+    await state.update_data(
+        license_key=key,
+        plan_payment_sig=signature,
+    )
+    await state.set_state(ActivationStates.waiting_for_payment_signature)
+
+    await message.answer(
+        f"✅ <b>Subscription payment verified!</b>\n"
+        f"Received ~{result.get('received_sol', plan_amount):.4f} SOL on {network}.\n\n"
+        f"🔑 <b>Your license key</b> (locked to this Telegram account):\n"
+        f"<code>{key}</code>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔐 <b>FINAL STEP — ACTIVATION FEE</b>\n\n"
+        f"Network: {_network_hint()}\n"
+        f"Send exactly <b>{fee} SOL</b> to:\n"
+        f"<code>{wallet}</code>\n\n"
+        f"After sending, reply with the <b>transaction signature</b> to finish activation.",
         parse_mode="HTML",
     )
 
 
+# ── I HAVE A LICENSE ───────────────────────────────────────────────────────────
 @router.callback_query(F.data == "act:have_license")
 async def cb_have_license(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_license_key)
@@ -248,15 +403,15 @@ async def process_license_key(message: Message, state: FSMContext):
     await state.set_state(ActivationStates.waiting_for_payment_signature)
 
     wallet = _activation_wallet()
-    amount = getattr(settings, "ACTIVATION_AMOUNT_SOL", 1.0)
+    fee = _activation_fee()
     network = activation_network_label()
 
     await message.answer(
         f"✅ <b>License key accepted</b>\n"
         f"<i>This key will be locked to your Telegram account after payment.</i>\n\n"
         f"Network: {_network_hint()}\n"
-        f"Activation fee: <b>{amount} SOL</b>\n\n"
-        f"Send exactly <b>{amount} SOL</b> to:\n"
+        f"Activation fee: <b>{fee} SOL</b>\n\n"
+        f"Send exactly <b>{fee} SOL</b> to:\n"
         f"<code>{wallet}</code>\n\n"
         f"After sending, reply with the <b>transaction signature</b>.\n"
         f"<i>Use the {network} cluster when checking the explorer.</i>",
@@ -264,6 +419,7 @@ async def process_license_key(message: Message, state: FSMContext):
     )
 
 
+# ── 1 SOL activation fee ───────────────────────────────────────────────────────
 @router.message(ActivationStates.waiting_for_payment_signature)
 async def process_payment_signature(message: Message, state: FSMContext):
     if message.text and message.text.startswith("/"):
@@ -286,15 +442,20 @@ async def process_payment_signature(message: Message, state: FSMContext):
         return
 
     network = activation_network_label()
-    await message.answer(f"⏳ Checking the transaction on Solana <b>{network}</b>…", parse_mode="HTML")
+    fee = _activation_fee()
+    await message.answer(
+        f"⏳ Checking the <b>{fee} SOL</b> activation payment on Solana <b>{network}</b>…",
+        parse_mode="HTML",
+    )
 
-    result = await verify_payment_transaction(signature)
+    result = await verify_payment_transaction(signature, required_sol=fee)
 
     if not result["valid"]:
         await message.answer(
             f"❌ Payment verification failed.\n\n"
             f"<code>{result.get('error')}</code>\n\n"
-            f"Make sure you paid on <b>{network}</b> and paste the correct signature.",
+            f"Make sure you paid <b>{fee} SOL</b> on <b>{network}</b> "
+            f"and paste the correct signature.",
             parse_mode="HTML",
         )
         return
@@ -322,6 +483,7 @@ async def process_payment_signature(message: Message, state: FSMContext):
     )
 
 
+# ── Admin: Generate license keys ───────────────────────────────────────────────
 @router.message(Command("genkey"))
 async def cmd_genkey(message: Message, state: FSMContext):
     """
