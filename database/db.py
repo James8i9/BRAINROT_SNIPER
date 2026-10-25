@@ -271,7 +271,6 @@ async def init_db() -> None:
         await _migrate("ALTER TABLE auto_exit_settings ADD COLUMN notifications_enabled INTEGER DEFAULT 1")
         await _migrate("ALTER TABLE auto_exit_settings ADD COLUMN custom_slippage REAL DEFAULT 15.0")
 
-        # Full column layout required by seed_system_presets / clone_preset
         await db.execute("""
             CREATE TABLE IF NOT EXISTS exit_presets (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -294,7 +293,6 @@ async def init_db() -> None:
                 created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Migrations for DBs that got the incomplete slim schema
         await _migrate("ALTER TABLE exit_presets ADD COLUMN description TEXT DEFAULT ''")
         await _migrate("ALTER TABLE exit_presets ADD COLUMN tp1_pct REAL")
         await _migrate("ALTER TABLE exit_presets ADD COLUMN tp1_sell_pct REAL")
@@ -454,13 +452,23 @@ async def init_db() -> None:
             )
         """)
 
-        # ── FSM storage (aiogram SQLiteStorage) ───────────────────────────────
+        # ── FSM storage (utils.sqlite_storage.SQLiteStorage) ─────────────────
+        # Must match table names used by SQLiteStorage (fsm_states / fsm_data).
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS aiogram_states (
+            CREATE TABLE IF NOT EXISTS fsm_states (
                 chat_id    INTEGER NOT NULL,
                 user_id    INTEGER NOT NULL,
                 bot_id     INTEGER NOT NULL,
                 state      TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (chat_id, user_id, bot_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS fsm_data (
+                chat_id    INTEGER NOT NULL,
+                user_id    INTEGER NOT NULL,
+                bot_id     INTEGER NOT NULL,
                 data       TEXT DEFAULT '{}',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (chat_id, user_id, bot_id)
