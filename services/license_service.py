@@ -18,7 +18,6 @@ from utils.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Public RPCs for activation payment checks only (trading can stay on mainnet).
 _ACTIVATION_RPC = {
     "mainnet": "https://api.mainnet-beta.solana.com",
     "devnet":  "https://api.devnet.solana.com",
@@ -27,18 +26,15 @@ _ACTIVATION_RPC = {
 
 
 def _generate_key_code() -> str:
-    """Generate a key in the format XXXXX-XXXXX-XXXXX-XXXXX"""
     def block():
         return ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
     return f"{block()}-{block()}-{block()}-{block()}"
 
 
 def get_activation_rpc_url() -> str:
-    """RPC used only for activation fee verification."""
-    network = (getattr(settings, "ACTIVATION_NETWORK", None) or "mainnet").strip().lower()
+    network = (getattr(settings, "ACTIVATION_NETWORK", None) or "testnet").strip().lower()
     if network not in _ACTIVATION_RPC:
-        network = "mainnet"
-    # Optional explicit override
+        network = "testnet"
     override = getattr(settings, "ACTIVATION_RPC_URL", "") or ""
     if override.strip():
         return override.strip()
@@ -46,15 +42,12 @@ def get_activation_rpc_url() -> str:
 
 
 def activation_network_label() -> str:
-    network = (getattr(settings, "ACTIVATION_NETWORK", None) or "mainnet").strip().lower()
-    return network if network in _ACTIVATION_RPC else "mainnet"
+    network = (getattr(settings, "ACTIVATION_NETWORK", None) or "testnet").strip().lower()
+    return network if network in _ACTIVATION_RPC else "testnet"
 
 
 async def create_license_key(created_by: int, assigned_to: Optional[int] = None) -> str:
-    """
-    Generate and store a new license key.
-    If assigned_to is set, only that Telegram user_id may redeem the key.
-    """
+    """Generate and store a new license key. Optionally reserve for one Telegram user."""
     for _ in range(10):
         key = _generate_key_code()
         try:
@@ -80,10 +73,6 @@ async def get_license_key(key_code: str) -> Optional[dict]:
 
 
 async def validate_key_for_user(key_code: str, user_id: int) -> dict:
-    """
-    Check whether this Telegram user may start activation with this key.
-    Returns {"ok": bool, "error": str|None, "record": dict|None}
-    """
     record = await get_license_key(key_code)
     if not record:
         return {"ok": False, "error": "Invalid license key.", "record": None}
@@ -110,7 +99,6 @@ async def validate_key_for_user(key_code: str, user_id: int) -> dict:
             "record": record,
         }
 
-    # One active license per Telegram account
     if await is_user_activated(user_id):
         return {
             "ok": False,
@@ -122,13 +110,8 @@ async def validate_key_for_user(key_code: str, user_id: int) -> dict:
 
 
 async def mark_key_used(key_code: str, user_id: int) -> bool:
-    """
-    Bind the key to this Telegram user. Atomic: only succeeds if still unused
-    and (if assigned) matches assigned_to. Returns True on success.
-    """
     key = key_code.upper().strip()
     async with get_db() as db:
-        # Re-check assignment + unused under a single update
         cur = await db.execute("""
             UPDATE license_keys
             SET is_used = 1, used_by = ?, used_at = CURRENT_TIMESTAMP
@@ -144,7 +127,7 @@ async def is_user_activated(user_id: int) -> bool:
     async with get_db() as db:
         async with db.execute(
             "SELECT is_active FROM user_activations WHERE user_id = ? AND is_active = 1",
-            (user_id,)
+            (user_id,),
         ) as cur:
             row = await cur.fetchone()
             return bool(row)
@@ -164,14 +147,20 @@ async def activate_user(user_id: int, license_key: str, payment_signature: str) 
         await db.commit()
 
 
-async def verify_payment_transaction(signature: str) -> dict:
+async def verify_payment_transaction(
+    signature: str,
+    required_sol: Optional[float] = None,
+) -> dict:
     """
-    Verify that the given transaction sent approximately ACTIVATION_AMOUNT_SOL
-    to ACTIVATION_WALLET on ACTIVATION_NETWORK (mainnet / devnet / testnet).
-    Returns {"valid": bool, "error": str|None, ...}
+    Verify the tx sent ~required_sol to ACTIVATION_WALLET on ACTIVATION_NETWORK.
+    If required_sol is None, uses ACTIVATION_AMOUNT_SOL (default 1.0).
     """
     activation_wallet = getattr(settings, "ACTIVATION_WALLET", None)
-    required_sol = float(getattr(settings, "ACTIVATION_AMOUNT_SOL", 1.0))
+    if required_sol is None:
+        required_sol = float(getattr(settings, "ACTIVATION_AMOUNT_SOL", 1.0))
+    else:
+        required_sol = float(required_sol)
+
     network = activation_network_label()
     rpc_url = get_activation_rpc_url()
 
@@ -231,7 +220,7 @@ async def verify_payment_transaction(signature: str) -> dict:
                     return {
                         "valid": False,
                         "error": (
-                            f"Activation wallet not found in this transaction. "
+                            f"Payment wallet not found in this transaction. "
                             f"Send {required_sol} SOL on {network} to {activation_wallet}"
                         ),
                     }
