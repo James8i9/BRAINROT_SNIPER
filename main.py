@@ -19,17 +19,15 @@ from database.db import init_db
 
 from aiogram.types import BotCommand
 
-# ── Handlers ───────────────────────────────────────────────────────────────────
 from bot.handlers import menu, callbacks
 from bot.handlers import activation
-from bot.handlers import admin_user      # Admin user management + /myid
-from bot.handlers import sniper          # Sniper Tool
-from bot.handlers import auto_exit       # Auto-Exit Manager
-from bot.handlers import copy_trade      # ct:* Copy Trading
-from bot.handlers import wallet_scout    # ws:* Wallet Scout
-from bot.handlers import multi_wallet    # Multi-Wallet Manager
+from bot.handlers import admin_user
+from bot.handlers import sniper
+from bot.handlers import auto_exit
+from bot.handlers import copy_trade
+from bot.handlers import wallet_scout
+from bot.handlers import multi_wallet
 
-# ── Services ───────────────────────────────────────────────────────────────────
 from services.pumpportal_ws_service import pump_service
 from services.auto_exit_service import seed_system_presets
 import services.auto_buy_worker as auto_buy_worker
@@ -39,7 +37,6 @@ import services.wallet_discovery_worker as wallet_discovery_worker
 import services.watch_alert_worker as watch_alert_worker
 
 
-# ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -54,33 +51,28 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    # Public command list: wallet setup only for now
     await bot.set_my_commands([
-        BotCommand(command="start",     description="Open the bot"),
-        BotCommand(command="wallet",    description="Multi-Wallet Manager"),
-        BotCommand(command="sniper",    description="Sniper Tool"),
-        BotCommand(command="copy",      description="Copy Trade"),
+        BotCommand(command="start",  description="Open the bot"),
+        BotCommand(command="wallet", description="Import fund wallet / manage wallets"),
     ])
 
     dp = Dispatcher(storage=SQLiteStorage())
 
-    # ── Database ───────────────────────────────────────────────────────────────
     await init_db()
-    await seed_system_presets()   # built-in auto-exit presets
+    await seed_system_presets()
 
-    # ── Routers ────────────────────────────────────────────────────────────────
-    # Order matters: more specific routers must come before the catch-all callbacks router.
     dp.include_router(activation.router)
     dp.include_router(commands.router)
     dp.include_router(menu.router)
-    dp.include_router(admin_user.router)     # /myid /adminuser /admingrant etc
-    dp.include_router(multi_wallet.router)   # mw:* Multi-Wallet Manager
-    dp.include_router(auto_exit.router)      # ae:*      callbacks + FSM
-    dp.include_router(sniper.router)         # sniper:*  callbacks + FSM
-    dp.include_router(copy_trade.router)     # ct:*      callbacks + FSM
-    dp.include_router(wallet_scout.router)   # ws:*      callbacks + FSM
-    dp.include_router(callbacks.router)      # menu:*    callbacks (last)
+    dp.include_router(admin_user.router)
+    dp.include_router(multi_wallet.router)
+    dp.include_router(auto_exit.router)
+    dp.include_router(sniper.router)
+    dp.include_router(copy_trade.router)
+    dp.include_router(wallet_scout.router)
+    dp.include_router(callbacks.router)
 
-    # ── Startup Log ────────────────────────────────────────────────────────────
     bot_info = await bot.get_me()
     logger.info("=" * 54)
     logger.info("  ShadowSnipe — Solana Trading Bot")
@@ -88,7 +80,6 @@ async def main() -> None:
     logger.info(f"  Admins  : {settings.ADMIN_IDS or 'none configured'}")
     logger.info("=" * 54)
 
-    # ── Background Tasks ───────────────────────────────────────────────────────
     ws_task = asyncio.create_task(pump_service.start())
     ab_task = asyncio.create_task(auto_buy_worker.start(bot))
     ae_task = asyncio.create_task(auto_exit_worker.start(bot))
@@ -117,8 +108,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     if sys.platform == "win32":
-        # Windows ProactorEventLoop doesn't support async DNS — switch to SelectorEventLoop
-        # which uses the system DNS thread pool correctly. Fixes "getaddrinfo failed" on Jupiter/aiohttp.
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         logging.getLogger("asyncio").setLevel(logging.CRITICAL)
     try:
