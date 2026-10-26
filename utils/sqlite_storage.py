@@ -2,12 +2,7 @@
 utils/sqlite_storage.py
 ========================
 Persistent SQLite-backed FSM storage for aiogram 3.
-
-Replaces MemoryStorage so that FSM states (sniper settings edits, preset
-creation, wallet prompts) survive bot restarts.
-
-Without this, every restart wipes all in-progress user flows and sends
-any follow-up text messages to the sniper catch-all ("Session expired").
+Uses the same DATABASE_PATH as the rest of the app (Railway volume).
 """
 
 import json
@@ -17,16 +12,13 @@ from typing import Any, Dict, Optional
 import aiosqlite
 from aiogram.fsm.storage.base import BaseStorage, StorageKey, StateType
 
-logger = logging.getLogger(__name__)
+from database.paths import get_db_path
 
-DB_PATH = "brainrot.db"
+logger = logging.getLogger(__name__)
 
 
 class SQLiteStorage(BaseStorage):
-    """
-    aiogram 3 FSM storage backed by brainrot.db.
-    Tables `fsm_states` and `fsm_data` are created by database/db.py on startup.
-    """
+    """aiogram 3 FSM storage backed by the shared SQLite file."""
 
     async def set_state(
         self,
@@ -34,7 +26,7 @@ class SQLiteStorage(BaseStorage):
         state: StateType = None,
     ) -> None:
         state_str = state.state if state else None
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(get_db_path()) as db:
             await db.execute(
                 """
                 INSERT INTO fsm_states (chat_id, user_id, bot_id, state)
@@ -48,7 +40,7 @@ class SQLiteStorage(BaseStorage):
             await db.commit()
 
     async def get_state(self, key: StorageKey) -> Optional[str]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(get_db_path()) as db:
             async with db.execute(
                 "SELECT state FROM fsm_states WHERE chat_id=? AND user_id=? AND bot_id=?",
                 (key.chat_id, key.user_id, key.bot_id),
@@ -61,7 +53,7 @@ class SQLiteStorage(BaseStorage):
         key: StorageKey,
         data: Dict[str, Any],
     ) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(get_db_path()) as db:
             await db.execute(
                 """
                 INSERT INTO fsm_data (chat_id, user_id, bot_id, data)
@@ -75,7 +67,7 @@ class SQLiteStorage(BaseStorage):
             await db.commit()
 
     async def get_data(self, key: StorageKey) -> Dict[str, Any]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(get_db_path()) as db:
             async with db.execute(
                 "SELECT data FROM fsm_data WHERE chat_id=? AND user_id=? AND bot_id=?",
                 (key.chat_id, key.user_id, key.bot_id),
@@ -89,4 +81,4 @@ class SQLiteStorage(BaseStorage):
             return {}
 
     async def close(self) -> None:
-        pass  # Connection opened/closed per operation — nothing to clean up
+        pass
