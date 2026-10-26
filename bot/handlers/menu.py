@@ -2,7 +2,6 @@
 bot/handlers/menu.py
 ====================
 Handles the /menu command.
-Sends the main inline keyboard menu.
 """
 
 from aiogram import Router
@@ -16,7 +15,11 @@ router = Router()
 MENU_TEXT = (
     "📋 <b>Main Menu</b>\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "Select a module below."
+    "Next steps:\n"
+    "1. Import your <b>Fund Wallet</b>\n"
+    "2. Generate <b>Buy Wallets</b>\n"
+    "3. <b>Distribute SOL</b> from Fund → Buy wallets\n\n"
+    "Open Wallet to continue:"
 )
 
 
@@ -25,4 +28,5 @@ async def handle_menu(message: Message) -> None:
     await message.answer(
         text=MENU_TEXT,
         reply_markup=build_main_menu(),
+        parse_mode="HTML",
     )
