@@ -7,6 +7,7 @@ Handles main-menu inline callbacks (help, onboarding, back).
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.context import FSMContext
 
 from bot.keyboards.main_menu import build_main_menu, build_back_button
 from utils.config import settings
@@ -269,7 +270,11 @@ async def cb_wip(callback: CallbackQuery) -> None:
 
 # ── Back to Menu ───────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "menu:back")
-async def cb_back(callback: CallbackQuery) -> None:
+async def cb_back(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        await state.clear()
+    except Exception:
+        pass
     await callback.message.edit_text(
         text=(
             "📋 <b>Main Menu</b>\n"
