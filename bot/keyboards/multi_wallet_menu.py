@@ -33,8 +33,16 @@ def build_generate_count_menu() -> InlineKeyboardMarkup:
 
 
 def build_back_to_mw() -> InlineKeyboardMarkup:
+    """Back to multi-wallet overview (only useful when a fund wallet already exists)."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="⬅️ Back", callback_data="mw:main"))
+    return builder.as_markup()
+
+
+def build_cancel_import() -> InlineKeyboardMarkup:
+    """Cancel import → main bot menu (not the empty multi-wallet manager)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Back", callback_data="menu:back"))
     return builder.as_markup()
 
 
