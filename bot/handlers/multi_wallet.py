@@ -14,6 +14,7 @@ from bot.keyboards.multi_wallet_menu import (
     build_multi_wallet_menu,
     build_generate_count_menu,
     build_back_to_mw,
+    build_cancel_import,
     build_confirm_distribute,
 )
 from services.multi_wallet_service import (
@@ -75,17 +76,41 @@ async def _build_wallet_overview(user_id: int) -> str:
     return "\n".join(lines)
 
 
+async def _show_import_fund(callback: CallbackQuery, state: FSMContext) -> None:
+    """Shared: prompt for fund wallet private key."""
+    await state.set_state(MultiWalletStates.waiting_for_fund_key)
+    await callback.message.edit_text(
+        "📥 <b>Import Fund Wallet</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Send the <b>private key</b> of the wallet you want to use as Fund Wallet.\n\n"
+        "Accepted formats:\n"
+        "• Base58 private key\n"
+        "• 64-byte hex\n"
+        "• JSON array\n\n"
+        "⚠️ Only import a wallet you own.\n"
+        "The key will be encrypted at rest.",
+        reply_markup=build_cancel_import(),
+        parse_mode="HTML",
+    )
+
+
 # ── Main Menu ────────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "mw:main")
 async def cb_mw_main(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
 
-    # License check
     if not await is_user_activated(user_id):
         await callback.message.edit_text(
             "🔒 ShadowSnipe license is not active.",
-            parse_mode="HTML"
+            parse_mode="HTML",
         )
+        await callback.answer()
+        return
+
+    # No fund wallet yet → stay on import, don't show empty manager
+    fund = await get_fund_wallet(user_id)
+    if not fund:
+        await _show_import_fund(callback, state)
         await callback.answer()
         return
 
@@ -107,20 +132,7 @@ async def cb_import_fund(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
         return
 
-    await state.set_state(MultiWalletStates.waiting_for_fund_key)
-    await callback.message.edit_text(
-        "📥 <b>Import Fund Wallet</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Send the <b>private key</b> of the wallet you want to use as Fund Wallet.\n\n"
-        "Accepted formats:\n"
-        "• Base58 private key\n"
-        "• 64-byte hex\n"
-        "• JSON array\n\n"
-        "⚠️ Only import a wallet you own.\n"
-        "The key will be encrypted at rest.",
-        reply_markup=build_back_to_mw(),
-        parse_mode="HTML",
-    )
+    await _show_import_fund(callback, state)
     await callback.answer()
 
 
@@ -145,7 +157,7 @@ async def process_fund_key(message: Message, state: FSMContext) -> None:
     else:
         await message.answer(
             f"❌ Failed to import wallet.\n\nError: <code>{result.get('error')}</code>",
-            reply_markup=build_back_to_mw(),
+            reply_markup=build_cancel_import(),
             parse_mode="HTML",
         )
     await state.clear()
@@ -156,6 +168,16 @@ async def process_fund_key(message: Message, state: FSMContext) -> None:
 async def cb_generate(callback: CallbackQuery) -> None:
     if not await is_user_activated(callback.from_user.id):
         await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
+        return
+
+    # Must have fund wallet first
+    if not await get_fund_wallet(callback.from_user.id):
+        await callback.message.edit_text(
+            "❌ Import a Fund Wallet first.",
+            reply_markup=build_cancel_import(),
+            parse_mode="HTML",
+        )
+        await callback.answer()
         return
 
     await callback.message.edit_text(
@@ -192,9 +214,14 @@ async def cb_generate_count(callback: CallbackQuery) -> None:
 
 # ── List / Refresh ────────────────────────────────────────────────────────────
 @router.callback_query(F.data == "mw:list")
-async def cb_list_wallets(callback: CallbackQuery) -> None:
+async def cb_list_wallets(callback: CallbackQuery, state: FSMContext) -> None:
     if not await is_user_activated(callback.from_user.id):
         await callback.answer("🔒 ShadowSnipe license is not active.", show_alert=True)
+        return
+
+    if not await get_fund_wallet(callback.from_user.id):
+        await _show_import_fund(callback, state)
+        await callback.answer()
         return
 
     text = await _build_wallet_overview(callback.from_user.id)
@@ -221,7 +248,7 @@ async def cb_distribute(callback: CallbackQuery, state: FSMContext) -> None:
     if not fund:
         await callback.message.edit_text(
             "❌ No Fund Wallet found.\nImport one first.",
-            reply_markup=build_back_to_mw(),
+            reply_markup=build_cancel_import(),
             parse_mode="HTML",
         )
         await callback.answer()
@@ -257,7 +284,10 @@ async def process_amount(message: Message, state: FSMContext) -> None:
         if amount <= 0:
             raise ValueError()
     except Exception:
-        await message.answer("❌ Invalid amount. Send a number like <code>0.05</code>", parse_mode="HTML")
+        await message.answer(
+            "❌ Invalid amount. Send a number like <code>0.05</code>",
+            parse_mode="HTML",
+        )
         return
 
     buys = await get_buy_wallets(message.from_user.id)
