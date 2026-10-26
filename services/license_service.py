@@ -4,7 +4,8 @@ services/license_service.py
 License key generation + user activation + payment verification.
 
 Keys are single-use and bound to exactly one Telegram account.
-Payment verification uses ACTIVATION_NETWORK (mainnet / devnet / testnet).
+Payment signatures are single-use (replay blocked).
+Payment verification uses ACTIVATION_NETWORK + optional ACTIVATION_RPC_URL / Helius.
 """
 
 import logging
@@ -24,6 +25,8 @@ _ACTIVATION_RPC = {
     "testnet": "https://api.testnet.solana.com",
 }
 
+_sig_table_ready = False
+
 
 def _generate_key_code() -> str:
     def block():
@@ -32,13 +35,25 @@ def _generate_key_code() -> str:
 
 
 def get_activation_rpc_url() -> str:
-    network = (getattr(settings, "ACTIVATION_NETWORK", None) or "testnet").strip().lower()
-    if network not in _ACTIVATION_RPC:
-        network = "testnet"
-    override = getattr(settings, "ACTIVATION_RPC_URL", "") or ""
-    if override.strip():
-        return override.strip()
-    return _ACTIVATION_RPC[network]
+    """
+    RPC for payment verification only.
+    Priority:
+      1) ACTIVATION_RPC_URL (explicit)
+      2) SOLANA_RPC_URL when network is mainnet (e.g. Helius)
+      3) public cluster endpoint
+    """
+    network = activation_network_label()
+    override = (getattr(settings, "ACTIVATION_RPC_URL", "") or "").strip()
+    if override:
+        return override
+
+    # Reuse trading Helius/mainnet RPC when verifying mainnet payments
+    if network == "mainnet":
+        trading = (getattr(settings, "SOLANA_RPC_URL", "") or "").strip()
+        if trading and "api.mainnet-beta.solana.com" not in trading:
+            return trading
+
+    return _ACTIVATION_RPC.get(network, _ACTIVATION_RPC["testnet"])
 
 
 def activation_network_label() -> str:
@@ -46,8 +61,69 @@ def activation_network_label() -> str:
     return network if network in _ACTIVATION_RPC else "testnet"
 
 
+async def _ensure_signature_table() -> None:
+    global _sig_table_ready
+    if _sig_table_ready:
+        return
+    async with get_db() as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS used_payment_signatures (
+                signature   TEXT    PRIMARY KEY,
+                user_id     INTEGER NOT NULL,
+                purpose     TEXT    NOT NULL DEFAULT 'activation',
+                amount_sol  REAL,
+                network     TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+    _sig_table_ready = True
+
+
+async def is_signature_used(signature: str) -> bool:
+    await _ensure_signature_table()
+    sig = signature.strip()
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT 1 FROM used_payment_signatures WHERE signature = ?",
+            (sig,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def claim_payment_signature(
+    signature: str,
+    user_id: int,
+    purpose: str = "activation",
+    amount_sol: Optional[float] = None,
+    network: Optional[str] = None,
+) -> bool:
+    """
+    Atomically claim a payment signature so it cannot be reused.
+    Returns True if this is the first claim, False if already used.
+    """
+    await _ensure_signature_table()
+    sig = signature.strip()
+    if not sig:
+        return False
+    async with get_db() as db:
+        try:
+            await db.execute(
+                """
+                INSERT INTO used_payment_signatures
+                    (signature, user_id, purpose, amount_sol, network)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (sig, user_id, purpose, amount_sol, network),
+            )
+            await db.commit()
+            return True
+        except Exception:
+            # UNIQUE constraint — already claimed
+            return False
+
+
 async def create_license_key(created_by: int, assigned_to: Optional[int] = None) -> str:
-    """Generate and store a new license key. Optionally reserve for one Telegram user."""
     for _ in range(10):
         key = _generate_key_code()
         try:
@@ -150,10 +226,13 @@ async def activate_user(user_id: int, license_key: str, payment_signature: str) 
 async def verify_payment_transaction(
     signature: str,
     required_sol: Optional[float] = None,
+    user_id: Optional[int] = None,
+    purpose: str = "activation",
 ) -> dict:
     """
     Verify the tx sent ~required_sol to ACTIVATION_WALLET on ACTIVATION_NETWORK.
-    If required_sol is None, uses ACTIVATION_AMOUNT_SOL (default 1.0).
+    If user_id is provided, rejects signatures already claimed (replay protection).
+    On success with user_id, claims the signature so it cannot be reused.
     """
     activation_wallet = getattr(settings, "ACTIVATION_WALLET", None)
     if required_sol is None:
@@ -163,16 +242,27 @@ async def verify_payment_transaction(
 
     network = activation_network_label()
     rpc_url = get_activation_rpc_url()
+    sig = (signature or "").strip()
+
+    if not sig:
+        return {"valid": False, "error": "Empty transaction signature"}
 
     if not activation_wallet:
         return {"valid": False, "error": "Activation wallet not configured"}
+
+    # Fail fast on known replay
+    if user_id is not None and await is_signature_used(sig):
+        return {
+            "valid": False,
+            "error": "This transaction signature was already used for activation.",
+        }
 
     body = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getTransaction",
         "params": [
-            signature.strip(),
+            sig,
             {
                 "encoding": "jsonParsed",
                 "maxSupportedTransactionVersion": 0,
@@ -238,6 +328,21 @@ async def verify_payment_transaction(
                             f"Received {received_sol:.4f} SOL, required ~{required_sol} SOL"
                         ),
                     }
+
+                # Claim after chain validation so bad sigs are not burned
+                if user_id is not None:
+                    claimed = await claim_payment_signature(
+                        sig,
+                        user_id=user_id,
+                        purpose=purpose,
+                        amount_sol=received_sol,
+                        network=network,
+                    )
+                    if not claimed:
+                        return {
+                            "valid": False,
+                            "error": "This transaction signature was already used for activation.",
+                        }
 
                 return {
                     "valid": True,
