@@ -10,7 +10,10 @@ from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
-from bot.keyboards.multi_wallet_menu import build_multi_wallet_menu, build_back_to_mw
+from bot.keyboards.multi_wallet_menu import (
+    build_multi_wallet_menu,
+    build_cancel_import,
+)
 from bot.handlers.multi_wallet import MultiWalletStates, _build_wallet_overview
 from services.multi_wallet_service import get_fund_wallet
 from services.license_service import is_user_activated
@@ -49,7 +52,7 @@ async def cmd_wallet(message: Message, state: FSMContext):
             "• JSON array\n\n"
             "⚠️ Only import a wallet you own.\n"
             "The key will be encrypted at rest.",
-            reply_markup=build_back_to_mw(),
+            reply_markup=build_cancel_import(),
             parse_mode="HTML",
         )
         return
