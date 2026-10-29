@@ -8,8 +8,10 @@ Payment signatures are single-use (replay blocked).
 Payment verification uses ACTIVATION_NETWORK + optional ACTIVATION_RPC_URL / Helius.
 """
 
+import asyncio
 import logging
 import random
+import re
 import string
 from typing import Optional
 
@@ -19,13 +21,24 @@ from utils.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Primary + fallback public RPCs per cluster (public endpoints can be flaky)
 _ACTIVATION_RPC = {
-    "mainnet": "https://api.mainnet-beta.solana.com",
-    "devnet":  "https://api.devnet.solana.com",
-    "testnet": "https://api.testnet.solana.com",
+    "mainnet": [
+        "https://api.mainnet-beta.solana.com",
+    ],
+    "devnet": [
+        "https://api.devnet.solana.com",
+        "https://rpc.ankr.com/solana_devnet",
+    ],
+    "testnet": [
+        "https://api.testnet.solana.com",
+    ],
 }
 
 _sig_table_ready = False
+
+# Base58-ish Solana signatures are typically 87–88 chars
+_SIG_RE = re.compile(r"[1-9A-HJ-NP-Za-km-z]{80,90}")
 
 
 def _generate_key_code() -> str:
@@ -34,31 +47,158 @@ def _generate_key_code() -> str:
     return f"{block()}-{block()}-{block()}-{block()}"
 
 
-def get_activation_rpc_url() -> str:
-    """
-    RPC for payment verification only.
-    Priority:
-      1) ACTIVATION_RPC_URL (explicit)
-      2) SOLANA_RPC_URL when network is mainnet (e.g. Helius)
-      3) public cluster endpoint
-    """
-    network = activation_network_label()
-    override = (getattr(settings, "ACTIVATION_RPC_URL", "") or "").strip()
-    if override:
-        return override
-
-    # Reuse trading Helius/mainnet RPC when verifying mainnet payments
-    if network == "mainnet":
-        trading = (getattr(settings, "SOLANA_RPC_URL", "") or "").strip()
-        if trading and "api.mainnet-beta.solana.com" not in trading:
-            return trading
-
-    return _ACTIVATION_RPC.get(network, _ACTIVATION_RPC["testnet"])
-
-
 def activation_network_label() -> str:
     network = (getattr(settings, "ACTIVATION_NETWORK", None) or "testnet").strip().lower()
     return network if network in _ACTIVATION_RPC else "testnet"
+
+
+def _normalize_signature(raw: str) -> str:
+    """Accept raw signature or explorer URL and return the signature string."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+
+    # Common explorer / Solscan / SolanaFM URLs
+    for marker in ("/tx/", "/transaction/", "signature="):
+        if marker in text:
+            part = text.split(marker, 1)[1]
+            part = part.split("?", 1)[0].split("&", 1)[0].split("/", 1)[0].strip()
+            if part:
+                return part
+
+    # Bare signature (maybe with whitespace / backticks)
+    text = text.strip("`'\" \t\n\r")
+    m = _SIG_RE.search(text)
+    if m:
+        return m.group(0)
+    return text
+
+
+def get_activation_rpc_urls() -> list[str]:
+    """
+    Ordered list of RPCs for payment verification.
+    Priority:
+      1) ACTIVATION_RPC_URL (explicit single override)
+      2) SOLANA_RPC_URL when network is mainnet (e.g. Helius)
+      3) public cluster endpoints (+ fallbacks)
+    """
+    network = activation_network_label()
+    urls: list[str] = []
+
+    override = (getattr(settings, "ACTIVATION_RPC_URL", "") or "").strip()
+    if override:
+        urls.append(override)
+
+    if network == "mainnet":
+        trading = (getattr(settings, "SOLANA_RPC_URL", "") or "").strip()
+        if trading and "api.mainnet-beta.solana.com" not in trading and trading not in urls:
+            urls.append(trading)
+
+    for u in _ACTIVATION_RPC.get(network, _ACTIVATION_RPC["testnet"]):
+        if u not in urls:
+            urls.append(u)
+
+    return urls or ["https://api.devnet.solana.com"]
+
+
+def get_activation_rpc_url() -> str:
+    """Back-compat single URL (first preferred)."""
+    return get_activation_rpc_urls()[0]
+
+
+async def _rpc_post(session: aiohttp.ClientSession, rpc_url: str, method: str, params: list) -> dict:
+    body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    async with session.post(rpc_url, json=body, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        return await resp.json()
+
+
+async def _fetch_transaction(sig: str, network: str) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Try multiple RPCs and a short retry loop until the tx appears.
+    Returns (result_dict, error_message).
+    """
+    rpc_urls = get_activation_rpc_urls()
+    last_error = None
+
+    async with aiohttp.ClientSession() as session:
+        # 1) Quick status probe (faster / often more available than full getTransaction)
+        for rpc_url in rpc_urls:
+            try:
+                data = await _rpc_post(
+                    session,
+                    rpc_url,
+                    "getSignatureStatuses",
+                    [[sig], {"searchTransactionHistory": True}],
+                )
+                if "error" in data:
+                    last_error = f"RPC error ({network}): {data['error']}"
+                    logger.warning("getSignatureStatuses error on %s: %s", rpc_url[:48], data["error"])
+                    continue
+                statuses = (data.get("result") or {}).get("value") or []
+                status = statuses[0] if statuses else None
+                if status is None:
+                    last_error = (
+                        f"Transaction not found on {network}. "
+                        f"Confirm you sent on Solana {network} and the signature is correct."
+                    )
+                    continue
+                if status.get("err"):
+                    return None, "Transaction failed on-chain"
+                # Found on this RPC — pull full tx next
+                break
+            except Exception as e:
+                last_error = str(e)
+                logger.warning("getSignatureStatuses failed on %s: %s", rpc_url[:48], e)
+
+        # 2) Full transaction — retry a few times (index lag on public Devnet RPCs)
+        for attempt in range(4):
+            for rpc_url in rpc_urls:
+                try:
+                    for commitment in ("confirmed", "finalized"):
+                        data = await _rpc_post(
+                            session,
+                            rpc_url,
+                            "getTransaction",
+                            [
+                                sig,
+                                {
+                                    "encoding": "jsonParsed",
+                                    "maxSupportedTransactionVersion": 0,
+                                    "commitment": commitment,
+                                },
+                            ],
+                        )
+                        if "error" in data:
+                            last_error = f"RPC error ({network}): {data['error']}"
+                            logger.warning(
+                                "getTransaction error on %s (%s): %s",
+                                rpc_url[:48], commitment, data["error"],
+                            )
+                            continue
+
+                        result = data.get("result")
+                        if result:
+                            logger.info(
+                                "Payment tx found on %s via %s (attempt %s, %s)",
+                                network, rpc_url[:48], attempt + 1, commitment,
+                            )
+                            return result, None
+
+                        last_error = (
+                            f"Transaction not found on {network}. "
+                            f"Confirm you sent on Solana {network} and the signature is correct."
+                        )
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning("getTransaction failed on %s: %s", rpc_url[:48], e)
+
+            if attempt < 3:
+                await asyncio.sleep(1.5 * (attempt + 1))
+
+    return None, last_error or (
+        f"Transaction not found on {network}. "
+        f"Confirm you sent on Solana {network} and the signature is correct."
+    )
 
 
 async def _ensure_signature_table() -> None:
@@ -241,115 +381,97 @@ async def verify_payment_transaction(
         required_sol = float(required_sol)
 
     network = activation_network_label()
-    rpc_url = get_activation_rpc_url()
-    sig = (signature or "").strip()
+    sig = _normalize_signature(signature)
 
     if not sig:
         return {"valid": False, "error": "Empty transaction signature"}
 
+    if len(sig) < 80:
+        return {
+            "valid": False,
+            "error": (
+                f"Signature looks too short ({len(sig)} chars). "
+                f"Paste the full transaction signature (or explorer /tx/ URL)."
+            ),
+        }
+
     if not activation_wallet:
         return {"valid": False, "error": "Activation wallet not configured"}
 
-    # Fail fast on known replay
+    # Fail fast on known replay (use normalized sig)
     if user_id is not None and await is_signature_used(sig):
         return {
             "valid": False,
             "error": "This transaction signature was already used for activation.",
         }
 
-    body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getTransaction",
-        "params": [
-            sig,
-            {
-                "encoding": "jsonParsed",
-                "maxSupportedTransactionVersion": 0,
-                "commitment": "confirmed",
-            },
-        ],
-    }
-
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                rpc_url, json=body, timeout=aiohttp.ClientTimeout(total=20)
-            ) as resp:
-                data = await resp.json()
+        result, fetch_error = await _fetch_transaction(sig, network)
+        if not result:
+            return {"valid": False, "error": fetch_error or f"Transaction not found on {network}"}
 
-                if "error" in data:
-                    return {"valid": False, "error": f"RPC error ({network}): {data['error']}"}
+        meta = result.get("meta", {}) or {}
+        if meta.get("err"):
+            return {"valid": False, "error": "Transaction failed on-chain"}
 
-                result = data.get("result")
-                if not result:
-                    return {
-                        "valid": False,
-                        "error": (
-                            f"Transaction not found on {network}. "
-                            f"Confirm you sent on Solana {network} and the signature is correct."
-                        ),
-                    }
+        pre_balances = meta.get("preBalances", []) or []
+        post_balances = meta.get("postBalances", []) or []
+        account_keys = (
+            result.get("transaction", {}).get("message", {}).get("accountKeys", []) or []
+        )
 
-                meta = result.get("meta", {})
-                if meta.get("err"):
-                    return {"valid": False, "error": "Transaction failed on-chain"}
+        target_index = None
+        for i, acc in enumerate(account_keys):
+            pubkey = acc if isinstance(acc, str) else (acc or {}).get("pubkey")
+            if pubkey == activation_wallet:
+                target_index = i
+                break
 
-                pre_balances = meta.get("preBalances", [])
-                post_balances = meta.get("postBalances", [])
-                account_keys = result.get("transaction", {}).get("message", {}).get("accountKeys", [])
+        if target_index is None:
+            return {
+                "valid": False,
+                "error": (
+                    f"Payment wallet not found in this transaction. "
+                    f"Send {required_sol} SOL on {network} to {activation_wallet}"
+                ),
+            }
 
-                target_index = None
-                for i, acc in enumerate(account_keys):
-                    pubkey = acc if isinstance(acc, str) else acc.get("pubkey")
-                    if pubkey == activation_wallet:
-                        target_index = i
-                        break
+        pre = pre_balances[target_index] if target_index < len(pre_balances) else 0
+        post = post_balances[target_index] if target_index < len(post_balances) else 0
+        received_lamports = post - pre
+        received_sol = received_lamports / 1_000_000_000
 
-                if target_index is None:
-                    return {
-                        "valid": False,
-                        "error": (
-                            f"Payment wallet not found in this transaction. "
-                            f"Send {required_sol} SOL on {network} to {activation_wallet}"
-                        ),
-                    }
+        if received_sol < (required_sol * 0.95):
+            return {
+                "valid": False,
+                "error": (
+                    f"Insufficient amount on {network}. "
+                    f"Received {received_sol:.4f} SOL, required ~{required_sol} SOL"
+                ),
+            }
 
-                pre = pre_balances[target_index] if target_index < len(pre_balances) else 0
-                post = post_balances[target_index] if target_index < len(post_balances) else 0
-                received_lamports = post - pre
-                received_sol = received_lamports / 1_000_000_000
-
-                if received_sol < (required_sol * 0.95):
-                    return {
-                        "valid": False,
-                        "error": (
-                            f"Insufficient amount on {network}. "
-                            f"Received {received_sol:.4f} SOL, required ~{required_sol} SOL"
-                        ),
-                    }
-
-                # Claim after chain validation so bad sigs are not burned
-                if user_id is not None:
-                    claimed = await claim_payment_signature(
-                        sig,
-                        user_id=user_id,
-                        purpose=purpose,
-                        amount_sol=received_sol,
-                        network=network,
-                    )
-                    if not claimed:
-                        return {
-                            "valid": False,
-                            "error": "This transaction signature was already used for activation.",
-                        }
-
+        # Claim after chain validation so bad sigs are not burned
+        if user_id is not None:
+            claimed = await claim_payment_signature(
+                sig,
+                user_id=user_id,
+                purpose=purpose,
+                amount_sol=received_sol,
+                network=network,
+            )
+            if not claimed:
                 return {
-                    "valid": True,
-                    "error": None,
-                    "received_sol": received_sol,
-                    "network": network,
+                    "valid": False,
+                    "error": "This transaction signature was already used for activation.",
                 }
+
+        return {
+            "valid": True,
+            "error": None,
+            "received_sol": received_sol,
+            "network": network,
+            "signature": sig,
+        }
 
     except Exception as e:
         logger.error(f"Payment verification failed ({network}): {e}")
