@@ -15,7 +15,7 @@ Payment signatures are single-use (replay blocked).
 
 import logging
 from aiogram import Router, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -413,34 +413,3 @@ async def process_payment_signature(message: Message, state: FSMContext):
         "Next: /wallet → import Fund Wallet → generate Buy Wallets → Distribute SOL.",
         parse_mode="HTML",
     )
-
-
-@router.message(Command("genkey"))
-async def cmd_genkey(message: Message, state: FSMContext):
-    await state.clear()
-
-    admin_ids = getattr(settings, "ADMIN_IDS", []) or []
-    if isinstance(admin_ids, str):
-        admin_ids = [x.strip() for x in admin_ids.split(",") if x.strip()]
-
-    if str(message.from_user.id) not in [str(x) for x in admin_ids]:
-        await message.answer("Unauthorized.")
-        return
-
-    parts = (message.text or "").split()
-    assigned_to = None
-    if len(parts) >= 2 and parts[1].isdigit():
-        assigned_to = int(parts[1])
-
-    try:
-        key = await create_license_key(message.from_user.id, assigned_to=assigned_to)
-        if assigned_to:
-            note = f"Reserved for Telegram ID <code>{assigned_to}</code> only."
-        else:
-            note = "Open key — first account that completes payment locks it permanently."
-        await message.answer(
-            f"🔑 <b>New License Key:</b>\n\n<code>{key}</code>\n\n{note}\n\nShare this key with the user.",
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        await message.answer(f"Failed to generate key: {e}")
