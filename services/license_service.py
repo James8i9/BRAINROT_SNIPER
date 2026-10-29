@@ -6,6 +6,7 @@ License key generation + user activation + payment verification.
 Keys are single-use and bound to exactly one Telegram account.
 Payment signatures are single-use (replay blocked).
 Payment verification uses ACTIVATION_NETWORK + optional ACTIVATION_RPC_URL / Helius.
+Admins (ADMIN_IDS) are treated as always activated.
 """
 
 import asyncio
@@ -340,6 +341,15 @@ async def mark_key_used(key_code: str, user_id: int) -> bool:
 
 
 async def is_user_activated(user_id: int) -> bool:
+    """True if user is activated OR is an admin (admins bypass license)."""
+    # Lazy import avoids circular import with utils.admin -> config
+    try:
+        from utils.admin import is_admin
+        if is_admin(user_id):
+            return True
+    except Exception:
+        pass
+
     async with get_db() as db:
         async with db.execute(
             "SELECT is_active FROM user_activations WHERE user_id = ? AND is_active = 1",
@@ -361,6 +371,79 @@ async def activate_user(user_id: int, license_key: str, payment_signature: str) 
                 activated_at = CURRENT_TIMESTAMP
         """, (user_id, license_key.upper().strip(), payment_signature))
         await db.commit()
+
+
+async def admin_force_activate(user_id: int, note: str = "ADMIN_GRANT") -> None:
+    """Admin: activate a user without payment / key."""
+    await activate_user(user_id, license_key=note[:64], payment_signature=f"admin:{note}"[:128])
+
+
+async def admin_deactivate(user_id: int) -> bool:
+    """Admin: revoke activation. Returns True if a row was updated."""
+    async with get_db() as db:
+        cur = await db.execute(
+            "UPDATE user_activations SET is_active = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_activation_stats() -> dict:
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM user_activations WHERE is_active = 1"
+        ) as cur:
+            active = (await cur.fetchone())["n"]
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM license_keys"
+        ) as cur:
+            keys_total = (await cur.fetchone())["n"]
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM license_keys WHERE is_used = 0"
+        ) as cur:
+            keys_unused = (await cur.fetchone())["n"]
+        async with db.execute(
+            "SELECT COUNT(*) AS n FROM used_payment_signatures"
+        ) as cur:
+            payments = (await cur.fetchone())["n"]
+    return {
+        "active_users": active,
+        "keys_total": keys_total,
+        "keys_unused": keys_unused,
+        "payments_claimed": payments,
+    }
+
+
+async def list_recent_activations(limit: int = 15) -> list[dict]:
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT user_id, license_key, payment_signature, activated_at, is_active
+            FROM user_activations
+            ORDER BY activated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def list_unused_keys(limit: int = 20) -> list[dict]:
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT key_code, created_by, assigned_to, created_at
+            FROM license_keys
+            WHERE is_used = 0
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
 
 
 async def verify_payment_transaction(
