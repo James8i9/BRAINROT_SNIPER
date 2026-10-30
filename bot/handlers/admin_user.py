@@ -6,19 +6,17 @@ Real admin tools for ShadowSnipe.
 Requires your Telegram ID in ADMIN_IDS (Railway Variables).
 
 Commands:
-  /myid                         — anyone: show Telegram user ID
-  /admin                        — admin panel help
-  /genkey [user_id]             — create license key (optional lock to user)
-  /activate <user_id>           — force-activate without payment
-  /deactivate <user_id>         — revoke access
-  /adminuser <user_id>          — user + wallet + activation summary
-  /walletuser <user_id>         — live SOL balances + Refresh / Export buttons
-  /allwallets [page]            — live view of ALL users' wallets + Refresh
-  /exportkey <user_id>          — export all private keys for a user
-  /exportkey <user_id> fund     — fund wallet key only
-  /stats                        — activation / key counts
-  /listkeys                     — recent unused license keys
-  /activations                  — recent activations
+  /myid /admin /genkey /activate /deactivate /adminuser
+  /stats /listkeys /activations
+
+  Wallets:
+  /allwallets [page]     — all users + balances + Refresh / Open
+  /walletuser <id>       — one user + Refresh / Export
+  /walletstats           — AUM + wallet counts
+  /wallettop [n]         — top users by total SOL
+  /findwallet <address>  — who owns this address
+  /exportkey <id> [fund|buy|all]
+  /wipewallets <id>      — soft-deactivate all multi-wallets for a user
 """
 
 import logging
@@ -52,7 +50,7 @@ from services.bot_wallet_service import get_sol_balance
 logger = logging.getLogger(__name__)
 router = Router()
 
-_ALL_WALLETS_PAGE_SIZE = 8
+_ALL_WALLETS_PAGE_SIZE = 6  # room for Open buttons
 
 
 def _deny_msg(message: Message) -> bool:
@@ -88,15 +86,32 @@ def _keypair_to_base58(kp) -> str:
 def _kb_walletuser(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄  Refresh Balances", callback_data=f"adm:wu:refresh:{uid}")],
-        [InlineKeyboardButton(text="🔓  Export Private Key", callback_data=f"adm:wu:export:{uid}")],
-        [InlineKeyboardButton(text="📋  All Wallets", callback_data="adm:aw:page:1")],
+        [
+            InlineKeyboardButton(text="🔓 Export all", callback_data=f"adm:wu:export:{uid}:all"),
+            InlineKeyboardButton(text="Fund only", callback_data=f"adm:wu:export:{uid}:fund"),
+        ],
+        [InlineKeyboardButton(text="Buy only", callback_data=f"adm:wu:export:{uid}:buy")],
+        [
+            InlineKeyboardButton(text="👤 User info", callback_data=f"adm:wu:info:{uid}"),
+            InlineKeyboardButton(text="📋 All wallets", callback_data="adm:aw:page:1"),
+        ],
     ])
 
 
-def _kb_allwallets(page: int, total_pages: int) -> InlineKeyboardMarkup:
+def _kb_allwallets(page: int, total_pages: int, page_uids: list[int]) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="🔄  Refresh Balances", callback_data=f"adm:aw:refresh:{page}")],
+        [InlineKeyboardButton(text="📊  Wallet stats", callback_data="adm:wstats")],
+        [InlineKeyboardButton(text="🏆  Top holders", callback_data="adm:wtop")],
     ]
+    # Open buttons for users on this page (2 per row)
+    open_btns = [
+        InlineKeyboardButton(text=f"👤 {uid}", callback_data=f"adm:wu:open:{uid}")
+        for uid in page_uids
+    ]
+    for i in range(0, len(open_btns), 2):
+        rows.append(open_btns[i : i + 2])
+
     nav = []
     if page > 1:
         nav.append(InlineKeyboardButton(text="◀️ Prev", callback_data=f"adm:aw:page:{page - 1}"))
@@ -134,7 +149,6 @@ async def _fetch_wallets_with_balances(user_id: int) -> tuple[list[dict], float]
 
 
 async def _build_walletuser_text(uid: int) -> tuple[str, bool]:
-    """Returns (html_text, has_wallets)."""
     activated = await is_user_activated(uid)
     wallets, total = await _fetch_wallets_with_balances(uid)
 
@@ -148,10 +162,14 @@ async def _build_walletuser_text(uid: int) -> tuple[str, bool]:
         )
         return text, False
 
+    fund_n = sum(1 for w in wallets if w["wallet_type"] == "fund")
+    buy_n = sum(1 for w in wallets if w["wallet_type"] == "buy")
+
     lines = [
         "🔑 <b>Live Wallet Balances</b>",
         f"User: <code>{uid}</code>",
         f"License: {'✅ active' if activated else '🔒 not active'}",
+        f"Wallets: {fund_n} fund · {buy_n} buy",
         "",
     ]
     for w in wallets:
@@ -168,8 +186,8 @@ async def _build_walletuser_text(uid: int) -> tuple[str, bool]:
     return "\n".join(lines), True
 
 
-async def _build_allwallets_page(page: int) -> tuple[str, int, int]:
-    """Returns (html_text, page, total_pages)."""
+async def _build_allwallets_page(page: int) -> tuple[str, int, int, list[int]]:
+    """Returns (html_text, page, total_pages, page_user_ids)."""
     async with get_db() as db:
         async with db.execute(
             """
@@ -187,7 +205,7 @@ async def _build_allwallets_page(page: int) -> tuple[str, int, int]:
             act_map = {int(r["user_id"]): bool(r["is_active"]) for r in await cur.fetchall()}
 
     if not rows:
-        return "No multi-wallets in the database yet.", 1, 1
+        return "No multi-wallets in the database yet.", 1, 1, []
 
     by_user: dict[int, list[dict]] = defaultdict(list)
     for r in rows:
@@ -250,12 +268,80 @@ async def _build_allwallets_page(page: int) -> tuple[str, int, int]:
 
     lines.append(f"💎 <b>Page total:</b> {grand_total:.4f} SOL")
     lines.append(f"<i>Updated {_now_stamp()}</i>")
-    lines.append("Tap a user detail: /walletuser <id>")
+    lines.append("Tap 👤 buttons below to open a user.")
 
     text = "\n".join(lines)
-    if len(text) > 3900:
-        text = text[:3850] + "\n\n…truncated"
-    return text, page, total_pages
+    if len(text) > 3500:
+        text = text[:3450] + "\n\n…truncated"
+    return text, page, total_pages, page_ids
+
+
+async def _compute_wallet_stats() -> dict:
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT user_id, wallet_address, wallet_type
+            FROM multi_wallets WHERE is_active = 1
+            """
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+    fund_n = sum(1 for r in rows if r["wallet_type"] == "fund")
+    buy_n = sum(1 for r in rows if r["wallet_type"] == "buy")
+    users = {int(r["user_id"]) for r in rows}
+
+    total_sol = 0.0
+    ok = 0
+    fail = 0
+    for r in rows:
+        try:
+            bal = await get_sol_balance(r["wallet_address"])
+            if bal is not None:
+                total_sol += float(bal)
+                ok += 1
+            else:
+                fail += 1
+        except Exception:
+            fail += 1
+
+    return {
+        "users": len(users),
+        "fund": fund_n,
+        "buy": buy_n,
+        "wallets": len(rows),
+        "total_sol": total_sol,
+        "rpc_ok": ok,
+        "rpc_fail": fail,
+    }
+
+
+async def _compute_top_holders(limit: int = 10) -> list[dict]:
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT user_id, wallet_address, wallet_type
+            FROM multi_wallets WHERE is_active = 1
+            """
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+    by_user: dict[int, float] = defaultdict(float)
+    counts: dict[int, int] = defaultdict(int)
+    for r in rows:
+        uid = int(r["user_id"])
+        counts[uid] += 1
+        try:
+            bal = await get_sol_balance(r["wallet_address"])
+            if bal is not None:
+                by_user[uid] += float(bal)
+        except Exception:
+            pass
+
+    ranked = sorted(by_user.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return [
+        {"user_id": uid, "total_sol": tot, "wallets": counts[uid]}
+        for uid, tot in ranked
+    ]
 
 
 async def _do_export_keys(message_or_cb_message, admin_id: int, uid: int, scope: str = "all") -> None:
@@ -338,18 +424,18 @@ async def cmd_admin(message: Message) -> None:
     await message.answer(
         "🛠 <b>ShadowSnipe Admin</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "<b>Keys</b>\n"
-        "/genkey — open license key\n"
-        "/genkey <user_id> — key locked to that Telegram ID\n"
-        "/listkeys — unused keys\n\n"
-        "<b>Access</b>\n"
-        "/activate <user_id> — grant access (no payment)\n"
-        "/deactivate <user_id> — revoke access\n"
-        "/adminuser <user_id> — full user summary\n\n"
+        "<b>Keys / access</b>\n"
+        "/genkey · /listkeys\n"
+        "/activate <id> · /deactivate <id>\n"
+        "/adminuser <id>\n\n"
         "<b>Wallets</b>\n"
-        "/allwallets — live balances for ALL users (+ Refresh)\n"
-        "/walletuser <user_id> — one user (+ Refresh / Export)\n"
-        "/exportkey <user_id> — export private keys\n\n"
+        "/allwallets — all users (Refresh + Open)\n"
+        "/walletuser <id> — one user live view\n"
+        "/walletstats — AUM + counts\n"
+        "/wallettop — richest users\n"
+        "/findwallet <address> — owner lookup\n"
+        "/exportkey <id> [fund|buy]\n"
+        "/wipewallets <id> — soft-remove user wallets\n\n"
         "<b>Overview</b>\n"
         "/stats · /activations\n\n"
         "⚠️ <i>Export is admin-only. Treat keys like cash.</i>",
@@ -420,10 +506,7 @@ async def cmd_deactivate(message: Message) -> None:
     if ok:
         await message.answer(f"🔒 User <code>{uid}</code> deactivated.", parse_mode="HTML")
     else:
-        await message.answer(
-            f"No activation row for <code>{uid}</code>.",
-            parse_mode="HTML",
-        )
+        await message.answer(f"No activation row for <code>{uid}</code>.", parse_mode="HTML")
 
 
 @router.message(Command("stats"))
@@ -550,8 +633,7 @@ async def cmd_adminuser(message: Message) -> None:
         f"<b>Joined:</b> {joined}\n"
         f"<b>License gate:</b> {'✅ pass' if activated else '🔒 blocked'}\n\n"
         f"<b>Activation:</b>\n{act_line}\n\n"
-        f"<b>Multi-wallets:</b>\n{wallets_text}\n\n"
-        f"Open live view: /walletuser {uid}",
+        f"<b>Multi-wallets:</b>\n{wallets_text}",
         parse_mode="HTML",
         reply_markup=_kb_walletuser(uid),
     )
@@ -587,19 +669,143 @@ async def cmd_allwallets(message: Message) -> None:
         page = max(1, int(parts[1]))
 
     status = await message.answer("⏳ Fetching all wallets + live balances…")
-    text, page, total_pages = await _build_allwallets_page(page)
+    text, page, total_pages, page_ids = await _build_allwallets_page(page)
+    kb = _kb_allwallets(page, total_pages, page_ids)
     try:
-        await status.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=_kb_allwallets(page, total_pages),
-        )
+        await status.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception:
-        await message.answer(
-            text,
-            parse_mode="HTML",
-            reply_markup=_kb_allwallets(page, total_pages),
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.message(Command("walletstats"))
+async def cmd_walletstats(message: Message) -> None:
+    if _deny_msg(message):
+        return
+
+    status = await message.answer("⏳ Scanning all wallets on-chain…")
+    s = await _compute_wallet_stats()
+    text = (
+        "📊 <b>Wallet AUM</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Users with wallets: <b>{s['users']}</b>\n"
+        f"Fund wallets: <b>{s['fund']}</b>\n"
+        f"Buy wallets: <b>{s['buy']}</b>\n"
+        f"Total wallets: <b>{s['wallets']}</b>\n\n"
+        f"💎 <b>Total visible SOL: {s['total_sol']:.4f}</b>\n"
+        f"RPC ok / fail: {s['rpc_ok']} / {s['rpc_fail']}\n\n"
+        f"<i>Updated {_now_stamp()}</i>"
+    )
+    try:
+        await status.edit_text(text, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("wallettop"))
+async def cmd_wallettop(message: Message) -> None:
+    if _deny_msg(message):
+        return
+
+    parts = (message.text or "").split()
+    limit = 10
+    if len(parts) >= 2 and parts[1].isdigit():
+        limit = max(1, min(25, int(parts[1])))
+
+    status = await message.answer(f"⏳ Ranking top {limit} holders…")
+    ranked = await _compute_top_holders(limit)
+    if not ranked:
+        await status.edit_text("No wallets found.")
+        return
+
+    lines = [f"🏆 <b>Top {len(ranked)} by total SOL</b>", ""]
+    for i, row in enumerate(ranked, 1):
+        lines.append(
+            f"{i}. <code>{row['user_id']}</code> — "
+            f"<b>{row['total_sol']:.4f}</b> SOL "
+            f"({row['wallets']} wallets)"
         )
+    lines.append(f"\n<i>Updated {_now_stamp()}</i>")
+    lines.append("Open: /walletuser <id>")
+
+    await status.edit_text("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("findwallet"))
+async def cmd_findwallet(message: Message) -> None:
+    if _deny_msg(message):
+        return
+
+    parts = (message.text or "").strip().split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer(
+            "Usage: /findwallet <address or prefix>\n"
+            "Example: /findwallet 5LWMLV",
+            parse_mode="HTML",
+        )
+        return
+
+    q = parts[1].strip()
+    async with get_db() as db:
+        async with db.execute(
+            """
+            SELECT user_id, wallet_address, wallet_type, label, is_active
+            FROM multi_wallets
+            WHERE wallet_address LIKE ?
+            ORDER BY is_active DESC, user_id
+            LIMIT 20
+            """,
+            (f"%{q}%",),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+    if not rows:
+        await message.answer(f"No wallet matching <code>{q}</code>.", parse_mode="HTML")
+        return
+
+    lines = [f"🔎 <b>Matches for</b> <code>{q}</code>", ""]
+    for r in rows:
+        on = "on" if r["is_active"] else "off"
+        bal = await get_sol_balance(r["wallet_address"]) if r["is_active"] else None
+        bal_str = f"{bal:.4f} SOL" if bal is not None else "—"
+        lines.append(
+            f"👤 <code>{r['user_id']}</code> [{r['wallet_type']}/{on}]\n"
+            f"<code>{r['wallet_address']}</code>\n"
+            f"Balance: <b>{bal_str}</b>\n"
+        )
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("wipewallets"))
+async def cmd_wipewallets(message: Message) -> None:
+    """Soft-deactivate all multi-wallets for a user (does not delete keys from DB history)."""
+    if _deny_msg(message):
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer(
+            "Usage: /wipewallets <user_id>\n"
+            "Sets is_active=0 on all of that user's multi_wallets.",
+            parse_mode="HTML",
+        )
+        return
+
+    uid = int(parts[1])
+    async with get_db() as db:
+        cur = await db.execute(
+            "UPDATE multi_wallets SET is_active = 0 WHERE user_id = ? AND is_active = 1",
+            (uid,),
+        )
+        await db.commit()
+        n = cur.rowcount
+
+    logger.warning("ADMIN_WIPE_WALLETS admin=%s target=%s count=%s", message.from_user.id, uid, n)
+    await message.answer(
+        f"🧹 Soft-deactivated <b>{n}</b> wallet(s) for user <code>{uid}</code>.\n"
+        f"Encrypted keys remain in DB but are hidden from normal flows.",
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("exportkey"))
@@ -611,9 +817,9 @@ async def cmd_exportkey(message: Message) -> None:
     if len(parts) < 2 or not parts[1].isdigit():
         await message.answer(
             "Usage:\n"
-            "/exportkey <user_id> — all\n"
-            "/exportkey <user_id> fund — fund only\n"
-            "/exportkey <user_id> buy — buy only",
+            "/exportkey <user_id>\n"
+            "/exportkey <user_id> fund\n"
+            "/exportkey <user_id> buy",
             parse_mode="HTML",
         )
         return
@@ -627,7 +833,7 @@ async def cmd_exportkey(message: Message) -> None:
     await _do_export_keys(message, message.from_user.id, uid, scope)
 
 
-# ── Callbacks: refresh / export / pagination ──────────────────────────────────
+# ── Callbacks ─────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("adm:wu:refresh:"))
 async def cb_wu_refresh(callback: CallbackQuery) -> None:
@@ -640,12 +846,9 @@ async def cb_wu_refresh(callback: CallbackQuery) -> None:
     text, _ = await _build_walletuser_text(uid)
     try:
         await callback.message.edit_text(
-            text,
-            parse_mode="HTML",
-            reply_markup=_kb_walletuser(uid),
+            text, parse_mode="HTML", reply_markup=_kb_walletuser(uid)
         )
     except Exception as e:
-        # same content → Telegram raises "message is not modified"
         if "not modified" not in str(e).lower():
             logger.warning("wu refresh edit failed: %s", e)
 
@@ -656,9 +859,53 @@ async def cb_wu_export(callback: CallbackQuery) -> None:
         await callback.answer("Unauthorized", show_alert=True)
         return
 
+    # adm:wu:export:{uid} or adm:wu:export:{uid}:{scope}
+    parts = callback.data.split(":")
+    uid = int(parts[3])
+    scope = parts[4] if len(parts) > 4 else "all"
+    if scope not in ("all", "fund", "buy"):
+        scope = "all"
+
+    await callback.answer("Exporting…")
+    await _do_export_keys(callback.message, callback.from_user.id, uid, scope)
+
+
+@router.callback_query(F.data.startswith("adm:wu:open:"))
+async def cb_wu_open(callback: CallbackQuery) -> None:
+    if _deny_cb(callback):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
     uid = int(callback.data.split(":")[-1])
-    await callback.answer("Exporting keys…")
-    await _do_export_keys(callback.message, callback.from_user.id, uid, "all")
+    await callback.answer("Loading…")
+    text, _ = await _build_walletuser_text(uid)
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=_kb_walletuser(uid))
+
+
+@router.callback_query(F.data.startswith("adm:wu:info:"))
+async def cb_wu_info(callback: CallbackQuery) -> None:
+    if _deny_cb(callback):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    uid = int(callback.data.split(":")[-1])
+    await callback.answer()
+    # Reuse adminuser-style short blurb
+    activated = await is_user_activated(uid)
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT username, first_name FROM users WHERE telegram_user_id = ?", (uid,)
+        ) as cur:
+            row = await cur.fetchone()
+    name = "—"
+    if row:
+        name = row["username"] or row["first_name"] or "—"
+    await callback.message.answer(
+        f"👤 <code>{uid}</code> · {name}\n"
+        f"License: {'✅' if activated else '🔒'}\n"
+        f"/adminuser {uid}",
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data.startswith("adm:aw:page:"))
@@ -670,11 +917,11 @@ async def cb_aw_page(callback: CallbackQuery) -> None:
     page = int(callback.data.split(":")[-1])
     await callback.answer()
     await callback.message.edit_text("⏳ Loading page…", parse_mode="HTML")
-    text, page, total_pages = await _build_allwallets_page(page)
+    text, page, total_pages, page_ids = await _build_allwallets_page(page)
     await callback.message.edit_text(
         text,
         parse_mode="HTML",
-        reply_markup=_kb_allwallets(page, total_pages),
+        reply_markup=_kb_allwallets(page, total_pages, page_ids),
     )
 
 
@@ -686,13 +933,53 @@ async def cb_aw_refresh(callback: CallbackQuery) -> None:
 
     page = int(callback.data.split(":")[-1])
     await callback.answer("Refreshing balances…")
-    text, page, total_pages = await _build_allwallets_page(page)
+    text, page, total_pages, page_ids = await _build_allwallets_page(page)
     try:
         await callback.message.edit_text(
             text,
             parse_mode="HTML",
-            reply_markup=_kb_allwallets(page, total_pages),
+            reply_markup=_kb_allwallets(page, total_pages, page_ids),
         )
     except Exception as e:
         if "not modified" not in str(e).lower():
             logger.warning("aw refresh edit failed: %s", e)
+
+
+@router.callback_query(F.data == "adm:wstats")
+async def cb_wstats(callback: CallbackQuery) -> None:
+    if _deny_cb(callback):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    await callback.answer("Scanning…")
+    s = await _compute_wallet_stats()
+    await callback.message.answer(
+        "📊 <b>Wallet AUM</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Users with wallets: <b>{s['users']}</b>\n"
+        f"Fund: <b>{s['fund']}</b> · Buy: <b>{s['buy']}</b>\n"
+        f"💎 Total visible SOL: <b>{s['total_sol']:.4f}</b>\n"
+        f"<i>{_now_stamp()}</i>",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "adm:wtop")
+async def cb_wtop(callback: CallbackQuery) -> None:
+    if _deny_cb(callback):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    await callback.answer("Ranking…")
+    ranked = await _compute_top_holders(10)
+    if not ranked:
+        await callback.message.answer("No wallets found.")
+        return
+
+    lines = ["🏆 <b>Top 10 by total SOL</b>", ""]
+    for i, row in enumerate(ranked, 1):
+        lines.append(
+            f"{i}. <code>{row['user_id']}</code> — "
+            f"<b>{row['total_sol']:.4f}</b> SOL"
+        )
+    await callback.message.answer("\n".join(lines), parse_mode="HTML")
