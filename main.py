@@ -27,6 +27,7 @@ from bot.handlers import auto_exit
 from bot.handlers import copy_trade
 from bot.handlers import wallet_scout
 from bot.handlers import multi_wallet
+from bot.handlers import pnl
 
 from services.pumpportal_ws_service import pump_service
 from services.auto_exit_service import seed_system_presets
@@ -51,10 +52,10 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    # Public command list: wallet setup only for now
     await bot.set_my_commands([
         BotCommand(command="start",  description="Open the bot"),
         BotCommand(command="wallet", description="Import fund wallet / manage wallets"),
+        BotCommand(command="pnl",    description="Generate PnL share card"),
     ])
 
     dp = Dispatcher(storage=SQLiteStorage())
@@ -71,6 +72,7 @@ async def main() -> None:
     dp.include_router(sniper.router)
     dp.include_router(copy_trade.router)
     dp.include_router(wallet_scout.router)
+    dp.include_router(pnl.router)
     dp.include_router(callbacks.router)
 
     bot_info = await bot.get_me()
