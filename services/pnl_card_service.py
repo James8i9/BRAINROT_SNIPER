@@ -1,7 +1,7 @@
 """
 services/pnl_card_service.py
 ==============================
-Generate BLOCK_BOT-style PnL share cards and aggregate trade stats.
+Generate professional ShadowSnipe PnL share cards and aggregate trade stats.
 
 Card fields:
   symbol, buy_in_sol, sold_sol, hold_sol, roi_pct, profit_sol, profit_usd, wallets
@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import io
 import logging
-import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import aiohttp
 from database.sqlite_db import get_db
@@ -44,7 +43,6 @@ async def fetch_sol_price_usd() -> float:
     ]
     try:
         async with aiohttp.ClientSession() as session:
-            # CoinGecko
             try:
                 async with session.get(urls[0], timeout=aiohttp.ClientTimeout(total=8)) as resp:
                     if resp.status == 200:
@@ -54,7 +52,6 @@ async def fetch_sol_price_usd() -> float:
                             return px
             except Exception:
                 pass
-            # Jupiter
             try:
                 async with session.get(urls[1], timeout=aiohttp.ClientTimeout(total=8)) as resp:
                     if resp.status == 200:
@@ -91,16 +88,11 @@ async def aggregate_pnl_stats(
     hold_sol_override: Optional[float] = None,
     wallets_override: Optional[int] = None,
 ) -> PnlStats:
-    """
-    Aggregate buy/sell SOL from submitted_transactions + open position residual.
-    hold_sol_override: pass remaining position value if known from exit engine.
-    """
     token_address = (token_address or "").strip()
     buy_in = 0.0
     sold = 0.0
 
     async with get_db() as db:
-        # Buys / sells from tx log
         try:
             async with db.execute(
                 """
@@ -119,7 +111,6 @@ async def aggregate_pnl_stats(
         except Exception as e:
             logger.warning("tx aggregate failed: %s", e)
 
-        # Fallback / supplement from tracked_positions
         try:
             async with db.execute(
                 """
@@ -134,7 +125,7 @@ async def aggregate_pnl_stats(
                     amt = float(row["amount_sol"] or 0)
                     pos_buy += amt
                     if (row["status"] or "").lower() == "open":
-                        open_residual += amt  # approximate if no mark-to-market
+                        open_residual += amt
                 if buy_in <= 0 and pos_buy > 0:
                     buy_in = pos_buy
                 if hold_sol_override is None and open_residual > 0:
@@ -142,7 +133,6 @@ async def aggregate_pnl_stats(
         except Exception as e:
             logger.warning("position aggregate failed: %s", e)
 
-        # Wallets used: distinct buy multi-wallets for this user (best effort)
         wallets = wallets_override if wallets_override is not None else 0
         if wallets <= 0:
             try:
@@ -184,6 +174,8 @@ async def aggregate_pnl_stats(
 
 
 def _fmt_sol(n: float) -> str:
+    if abs(n) >= 1000:
+        return f"{n:,.1f}"
     if abs(n) >= 100:
         return f"{n:.2f}"
     if abs(n) >= 1:
@@ -193,138 +185,270 @@ def _fmt_sol(n: float) -> str:
 
 def _fmt_usd(n: float) -> str:
     sign = "+" if n >= 0 else "-"
-    return f"{sign}${abs(n):,.0f}"
+    v = abs(n)
+    if v >= 1_000_000:
+        return f"{sign}${v/1_000_000:.2f}M"
+    if v >= 10_000:
+        return f"{sign}${v:,.0f}"
+    if v >= 100:
+        return f"{sign}${v:,.0f}"
+    return f"{sign}${v:,.2f}"
 
 
 def _fmt_roi(n: float) -> str:
     sign = "+" if n >= 0 else ""
-    return f"{sign}{n:.0f}%"
+    if abs(n) >= 1000:
+        return f"{sign}{n:,.0f}%"
+    if abs(n) >= 100:
+        return f"{sign}{n:.0f}%"
+    return f"{sign}{n:.1f}%"
+
+
+def _load_font(size: int, bold: bool = False):
+    from PIL import ImageFont
+
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf" if bold else "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _blend(c1: Tuple[int, int, int], c2: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+    t = max(0.0, min(1.0, t))
+    return (
+        int(c1[0] + (c2[0] - c1[0]) * t),
+        int(c1[1] + (c2[1] - c1[1]) * t),
+        int(c1[2] + (c2[2] - c1[2]) * t),
+    )
+
+
+def _vertical_gradient(draw, box, top, bottom, steps: int = 48):
+    x0, y0, x1, y1 = box
+    h = max(1, y1 - y0)
+    for i in range(steps):
+        y_a = y0 + int(h * i / steps)
+        y_b = y0 + int(h * (i + 1) / steps)
+        c = _blend(top, bottom, i / max(1, steps - 1))
+        draw.rectangle([x0, y_a, x1, y_b], fill=c)
+
+
+def _draw_glow_ellipse(base, center, rx, ry, color, layers: int = 8):
+    """Soft glow by stacking translucent ellipses on RGBA layer."""
+    from PIL import Image, ImageDraw
+
+    W, H = base.size
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    cx, cy = center
+    for i in range(layers, 0, -1):
+        t = i / layers
+        alpha = int(18 * t)
+        pad = int(28 * (1 - t) + 4)
+        od.ellipse(
+            [cx - rx - pad, cy - ry - pad, cx + rx + pad, cy + ry + pad],
+            fill=(*color, alpha),
+        )
+    base.alpha_composite(overlay)
+
+
+def _draw_metric_chip(draw, box, label, value, value_color, f_label, f_value, sol_tag: bool = True):
+    x0, y0, x1, y1 = box
+    # Panel
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=16, fill=(12, 18, 28), outline=(30, 48, 70), width=1)
+    # Accent bar on left
+    draw.rounded_rectangle([x0, y0 + 10, x0 + 4, y1 - 10], radius=2, fill=(0, 200, 230))
+
+    draw.text((x0 + 18, y0 + 14), label, fill=(120, 140, 165), font=f_label)
+    draw.text((x0 + 18, y0 + 42), value, fill=value_color, font=f_value)
+    if sol_tag and label != "ROI":
+        # small SOL mark after value
+        try:
+            vw = draw.textlength(value, font=f_value)
+        except Exception:
+            vw = len(value) * 14
+        draw.text((x0 + 18 + vw + 8, y0 + 50), "SOL", fill=(0, 180, 210), font=f_label)
+
+
+def _draw_mark(draw, cx: int, cy: int, positive: bool):
+    """Abstract hexagonal mark (professional, not cartoon)."""
+    cyan = (0, 210, 240) if positive else (255, 90, 110)
+    dim = (0, 90, 120) if positive else (120, 40, 50)
+
+    # Outer hex ring
+    r = 118
+    pts = []
+    import math
+    for i in range(6):
+        a = math.radians(60 * i - 30)
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    draw.polygon(pts, outline=dim, width=3)
+
+    r2 = 88
+    pts2 = []
+    for i in range(6):
+        a = math.radians(60 * i - 30)
+        pts2.append((cx + r2 * math.cos(a), cy + r2 * math.sin(a)))
+    draw.polygon(pts2, outline=cyan, width=2)
+
+    # Inner diamond
+    d = 36
+    draw.polygon(
+        [(cx, cy - d), (cx + d, cy), (cx, cy + d), (cx - d, cy)],
+        outline=cyan,
+        width=3,
+    )
+    # Core
+    draw.ellipse([cx - 8, cy - 8, cx + 8, cy + 8], fill=cyan)
 
 
 def render_pnl_card_image(stats: PnlStats) -> bytes:
     """
-    Draw a dark neon PnL card (Pillow). Returns PNG bytes.
-    No external assets required.
+    Professional dark fintech PnL card. Returns PNG bytes.
     """
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw, ImageFilter
     except ImportError as e:
         raise RuntimeError(
             "Pillow is required for PnL cards. Add pillow to requirements.txt"
         ) from e
 
-    W, H = 1200, 675
-    bg = (6, 10, 18)
-    cyan = (0, 229, 255)
-    cyan_dim = (0, 160, 190)
-    white = (240, 248, 255)
-    muted = (140, 160, 180)
-    green = (0, 255, 180)
-    red = (255, 80, 100)
+    W, H = 1280, 720
 
-    img = Image.new("RGB", (W, H), bg)
+    # Base with vertical gradient
+    img = Image.new("RGBA", (W, H), (5, 8, 14, 255))
+    draw = ImageDraw.Draw(img)
+    _vertical_gradient(draw, [0, 0, W, H], (8, 12, 22), (4, 6, 12), steps=64)
+
+    positive = stats.profit_sol >= 0
+    accent = (0, 229, 255) if positive else (255, 90, 110)
+    accent_soft = (0, 160, 190) if positive else (180, 60, 80)
+    green = (0, 230, 170)
+    red = (255, 95, 115)
+    white = (245, 250, 255)
+    muted = (130, 148, 170)
+    panel = (10, 16, 26)
+
+    # Ambient glow blobs
+    _draw_glow_ellipse(img, (220, 180), 260, 160, accent_soft, layers=10)
+    _draw_glow_ellipse(img, (1050, 360), 220, 200, accent_soft, layers=12)
+
     draw = ImageDraw.Draw(img)
 
-    # Soft grid / glow frames
-    draw.rounded_rectangle([24, 24, W - 24, H - 24], radius=28, outline=(20, 40, 60), width=2)
-    draw.rounded_rectangle([40, 40, W - 40, H - 40], radius=22, outline=(15, 30, 50), width=1)
+    # Outer frame
+    draw.rounded_rectangle([28, 28, W - 28, H - 28], radius=32, outline=(25, 40, 60), width=2)
+    draw.rounded_rectangle([36, 36, W - 36, H - 36], radius=28, outline=(18, 28, 42), width=1)
 
-    # Top bar brand
-    brand = getattr(settings, "BOT_USERNAME", "") or "ShadowSnipe"
-    brand = brand.lstrip("@") or "ShadowSnipe"
+    # Top accent line
+    draw.rectangle([80, 36, W - 80, 38], fill=(*accent, 180))
 
-    def font(size: int, bold: bool = False):
-        # DejaVu is commonly present on Linux (Railway). Fallback to default.
-        candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        ]
-        for path in candidates:
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
+    brand = (getattr(settings, "BOT_USERNAME", "") or "ShadowSnipe").lstrip("@") or "ShadowSnipe"
+    brand_disp = brand.upper().replace("_", " ")
 
-    f_brand = font(28, True)
-    f_sym = font(96, True)
-    f_label = font(22, True)
-    f_num = font(36, True)
-    f_profit = font(28, True)
-    f_usd = font(72, True)
-    f_small = font(20, False)
+    f_brand = _load_font(26, True)
+    f_sym = _load_font(92, True)
+    f_label = _load_font(18, True)
+    f_chip_val = _load_font(30, True)
+    f_section = _load_font(18, True)
+    f_profit = _load_font(32, True)
+    f_usd = _load_font(78, True)
+    f_small = _load_font(18, False)
+    f_tiny = _load_font(15, False)
 
-    draw.text((64, 56), brand.upper().replace("_", " "), fill=cyan_dim, font=f_brand)
+    # Brand row
+    draw.text((72, 58), brand_disp, fill=accent_soft, font=f_brand)
 
-    # Wallets badge top-right
+    # Wallets pill
     badge = f"{stats.wallets} WALLETS"
-    bw = draw.textlength(badge, font=f_small) + 36
-    bx0, by0 = W - 64 - bw, 52
-    draw.rounded_rectangle([bx0, by0, bx0 + bw, by0 + 36], radius=18, outline=cyan_dim, width=2)
-    draw.text((bx0 + 18, by0 + 8), badge, fill=cyan, font=f_small)
+    try:
+        bw = int(draw.textlength(badge, font=f_small)) + 40
+    except Exception:
+        bw = 140
+    bx0, by0 = W - 72 - bw, 56
+    draw.rounded_rectangle([bx0, by0, bx0 + bw, by0 + 38], radius=19, outline=accent_soft, width=2)
+    draw.text((bx0 + 20, by0 + 9), badge, fill=accent, font=f_small)
 
-    # Symbol
+    # Token symbol
     symbol = stats.symbol if stats.symbol.startswith("$") else f"${stats.symbol}"
-    draw.text((64, 130), symbol, fill=white, font=f_sym)
-    # underline accent
-    draw.rectangle([64, 240, 280, 246], fill=cyan)
+    draw.text((72, 118), symbol, fill=white, font=f_sym)
 
-    # Metrics row
-    labels = ["BUY IN", "SOLD", "HOLD", "ROI"]
-    values = [
-        _fmt_sol(stats.buy_in_sol),
-        _fmt_sol(stats.sold_sol),
-        _fmt_sol(stats.hold_sol),
-        _fmt_roi(stats.roi_pct),
+    # Cyan underline under symbol
+    try:
+        sw = int(draw.textlength(symbol, font=f_sym))
+    except Exception:
+        sw = 220
+    underline_w = min(sw, 320)
+    draw.rectangle([72, 222, 72 + underline_w, 228], fill=accent)
+
+    # Metric chips row
+    chip_y0, chip_y1 = 260, 350
+    gap = 18
+    chip_w = (W - 72 - 72 - gap * 3) // 4
+    metrics = [
+        ("BUY IN", _fmt_sol(stats.buy_in_sol), white, True),
+        ("SOLD", _fmt_sol(stats.sold_sol), white, True),
+        ("HOLD", _fmt_sol(stats.hold_sol), white, True),
+        ("ROI", _fmt_roi(stats.roi_pct), green if stats.roi_pct >= 0 else red, False),
     ]
-    colors = [white, white, white, green if stats.roi_pct >= 0 else red]
+    for i, (lab, val, col, sol_tag) in enumerate(metrics):
+        x0 = 72 + i * (chip_w + gap)
+        _draw_metric_chip(
+            draw, [x0, chip_y0, x0 + chip_w, chip_y1],
+            lab, val, col, f_label, f_chip_val, sol_tag=sol_tag,
+        )
 
-    x = 64
-    y_lab, y_val = 290, 330
-    col_w = 200
-    for i, (lab, val, col) in enumerate(zip(labels, values, colors)):
-        draw.text((x + i * col_w, y_lab), lab, fill=muted, font=f_label)
-        draw.text((x + i * col_w, y_val), val, fill=col, font=f_num)
-
-    # Profit SOL
+    # Profit block
     profit_sign = "+" if stats.profit_sol >= 0 else ""
-    draw.text((64, 420), "PROFIT", fill=muted, font=f_label)
+    profit_color = green if positive else red
+
+    draw.text((72, 390), "NET PROFIT", fill=muted, font=f_section)
     draw.text(
-        (64, 455),
+        (72, 420),
         f"{profit_sign}{_fmt_sol(stats.profit_sol)} SOL",
-        fill=green if stats.profit_sol >= 0 else red,
+        fill=profit_color,
         font=f_profit,
     )
 
-    # Big USD
-    usd = _fmt_usd(stats.profit_usd) if stats.sol_price_usd > 0 else (
-        f"{'+' if stats.profit_sol >= 0 else ''}{_fmt_sol(stats.profit_sol)} SOL"
-    )
-    draw.text(
-        (64, 520),
-        usd,
-        fill=cyan if stats.profit_sol >= 0 else red,
-        font=f_usd,
-    )
+    if stats.sol_price_usd > 0:
+        usd_text = _fmt_usd(stats.profit_usd)
+    else:
+        usd_text = f"{profit_sign}{_fmt_sol(stats.profit_sol)} SOL"
 
-    # Stylized skull placeholder (geometric)
-    cx, cy = 980, 340
-    draw.ellipse([cx - 110, cy - 130, cx + 110, cy + 90], outline=cyan_dim, width=3)
-    draw.ellipse([cx - 55, cy - 70, cx - 10, cy - 25], outline=cyan, width=3)  # eye L
-    draw.ellipse([cx + 10, cy - 70, cx + 55, cy - 25], outline=cyan, width=3)  # eye R
-    draw.polygon(
-        [(cx - 15, cy + 5), (cx + 15, cy + 5), (cx, cy + 40)],
-        outline=cyan_dim,
-    )
-    draw.arc([cx - 50, cy + 20, cx + 50, cy + 70], 20, 160, fill=cyan_dim, width=3)
+    draw.text((72, 475), usd_text, fill=accent if positive else red, font=f_usd)
 
-    # Footer links
-    bot_user = getattr(settings, "BOT_USERNAME", "") or "ShadowSnipe"
-    footer = f"t.me/{bot_user.lstrip('@')}  ·  ShadowSnipe"
-    draw.text((64, H - 70), footer, fill=muted, font=f_small)
+    # Divider above footer
+    draw.rectangle([72, H - 88, W - 72, H - 87], fill=(30, 45, 65))
+
+    # Right-side mark with glow
+    _draw_glow_ellipse(img, (1040, 400), 140, 140, accent_soft, layers=8)
+    draw = ImageDraw.Draw(img)
+    _draw_mark(draw, 1040, 400, positive)
+
+    # Footer
+    bot_user = (getattr(settings, "BOT_USERNAME", "") or "ShadowSnipe").lstrip("@")
+    mint = stats.token_address or ""
+    mint_short = f"{mint[:4]}…{mint[-4:]}" if len(mint) > 12 else mint
+    footer_l = f"t.me/{bot_user}"
+    footer_r = f"{mint_short}  ·  ShadowSnipe"
+    draw.text((72, H - 62), footer_l, fill=muted, font=f_tiny)
+    try:
+        rw = draw.textlength(footer_r, font=f_tiny)
+    except Exception:
+        rw = 200
+    draw.text((W - 72 - rw, H - 62), footer_r, fill=(90, 110, 130), font=f_tiny)
+
+    # Flatten to RGB PNG
+    out = Image.new("RGB", (W, H), (5, 8, 14))
+    out.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    out.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 
