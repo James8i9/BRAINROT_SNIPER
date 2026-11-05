@@ -3,15 +3,17 @@ services/pnl_card_service.py
 ==============================
 Generate professional ShadowSnipe PnL share cards and aggregate trade stats.
 
-Card fields:
-  symbol, buy_in_sol, sold_sol, hold_sol, roi_pct, profit_sol, profit_usd, wallets
+Brand mark: assets/shadowsnipe_skull.png (or .webp) — cyberpunk neon skull.
+Falls back to geometric mark if asset missing.
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple
 
 import aiohttp
@@ -19,6 +21,15 @@ from database.sqlite_db import get_db
 from utils.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Repo root (…/services/pnl_card_service.py → parent.parent)
+_ROOT = Path(__file__).resolve().parent.parent
+_LOGO_CANDIDATES = [
+    _ROOT / "assets" / "shadowsnipe_skull.png",
+    _ROOT / "assets" / "shadowsnipe_skull.webp",
+    _ROOT / "assets" / "logo.png",
+    Path(__file__).resolve().parent / "brand_assets" / "skull.png",
+]
 
 
 @dataclass
@@ -36,31 +47,26 @@ class PnlStats:
 
 
 async def fetch_sol_price_usd() -> float:
-    """Best-effort SOL/USD. Falls back to 0 if offline."""
     urls = [
         "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
         "https://price.jup.ag/v6/price?ids=SOL",
     ]
     try:
         async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(urls[0], timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    if resp.status == 200:
+            for url in urls:
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                        if resp.status != 200:
+                            continue
                         data = await resp.json()
-                        px = float((data.get("solana") or {}).get("usd") or 0)
+                        if "solana" in data:
+                            px = float((data.get("solana") or {}).get("usd") or 0)
+                        else:
+                            px = float(((data.get("data") or {}).get("SOL") or {}).get("price") or 0)
                         if px > 0:
                             return px
-            except Exception:
-                pass
-            try:
-                async with session.get(urls[1], timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        px = float(((data.get("data") or {}).get("SOL") or {}).get("price") or 0)
-                        if px > 0:
-                            return px
-            except Exception:
-                pass
+                except Exception:
+                    continue
     except Exception as e:
         logger.warning("SOL price fetch failed: %s", e)
     return 0.0
@@ -156,7 +162,6 @@ async def aggregate_pnl_stats(
 
     sol_px = await fetch_sol_price_usd()
     profit_usd = profit_sol * sol_px if sol_px > 0 else 0.0
-
     symbol = await get_token_symbol(token_address)
 
     return PnlStats(
@@ -240,7 +245,6 @@ def _vertical_gradient(draw, box, top, bottom, steps: int = 48):
 
 
 def _draw_glow_ellipse(base, center, rx, ry, color, layers: int = 8):
-    """Soft glow by stacking translucent ellipses on RGBA layer."""
     from PIL import Image, ImageDraw
 
     W, H = base.size
@@ -249,8 +253,8 @@ def _draw_glow_ellipse(base, center, rx, ry, color, layers: int = 8):
     cx, cy = center
     for i in range(layers, 0, -1):
         t = i / layers
-        alpha = int(18 * t)
-        pad = int(28 * (1 - t) + 4)
+        alpha = int(22 * t)
+        pad = int(32 * (1 - t) + 4)
         od.ellipse(
             [cx - rx - pad, cy - ry - pad, cx + rx + pad, cy + ry + pad],
             fill=(*color, alpha),
@@ -258,95 +262,98 @@ def _draw_glow_ellipse(base, center, rx, ry, color, layers: int = 8):
     base.alpha_composite(overlay)
 
 
-def _draw_metric_chip(draw, box, label, value, value_color, f_label, f_value, sol_tag: bool = True):
-    x0, y0, x1, y1 = box
-    # Panel
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=16, fill=(12, 18, 28), outline=(30, 48, 70), width=1)
-    # Accent bar on left
-    draw.rounded_rectangle([x0, y0 + 10, x0 + 4, y1 - 10], radius=2, fill=(0, 200, 230))
+def _load_brand_logo(size: int = 280):
+    """
+    Load the cyberpunk skull brand mark.
+    Prefer assets/shadowsnipe_skull.png (upload your logo there).
+    Also tries services.brand_logo if present.
+    """
+    from PIL import Image
 
-    draw.text((x0 + 18, y0 + 14), label, fill=(120, 140, 165), font=f_label)
+    # 1) Files on disk
+    for path in _LOGO_CANDIDATES:
+        try:
+            if path.is_file():
+                im = Image.open(path).convert("RGBA")
+                im = im.resize((size, size), Image.Resampling.LANCZOS)
+                logger.info("PnL logo loaded from %s", path)
+                return im
+        except Exception as e:
+            logger.warning("logo load failed %s: %s", path, e)
+
+    # 2) Embedded module (optional)
+    try:
+        from services.brand_logo import load_logo_bytes
+        im = Image.open(io.BytesIO(load_logo_bytes())).convert("RGBA")
+        im = im.resize((size, size), Image.Resampling.LANCZOS)
+        return im
+    except Exception:
+        pass
+
+    return None
+
+
+def _draw_metric_chip(draw, box, label, value, value_color, f_label, f_value, accent, sol_tag: bool = True):
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=16, fill=(10, 16, 22), outline=(28, 55, 45), width=1)
+    draw.rounded_rectangle([x0, y0 + 10, x0 + 4, y1 - 10], radius=2, fill=accent)
+
+    draw.text((x0 + 18, y0 + 14), label, fill=(120, 150, 140), font=f_label)
     draw.text((x0 + 18, y0 + 42), value, fill=value_color, font=f_value)
     if sol_tag and label != "ROI":
-        # small SOL mark after value
         try:
             vw = draw.textlength(value, font=f_value)
         except Exception:
             vw = len(value) * 14
-        draw.text((x0 + 18 + vw + 8, y0 + 50), "SOL", fill=(0, 180, 210), font=f_label)
+        draw.text((x0 + 18 + vw + 8, y0 + 50), "SOL", fill=accent, font=f_label)
 
 
-def _draw_mark(draw, cx: int, cy: int, positive: bool):
-    """Abstract hexagonal mark (professional, not cartoon)."""
-    cyan = (0, 210, 240) if positive else (255, 90, 110)
-    dim = (0, 90, 120) if positive else (120, 40, 50)
-
-    # Outer hex ring
-    r = 118
-    pts = []
+def _draw_fallback_mark(draw, cx: int, cy: int, accent):
     import math
-    for i in range(6):
-        a = math.radians(60 * i - 30)
-        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    dim = (0, 80, 55)
+    r = 118
+    pts = [(cx + r * math.cos(math.radians(60 * i - 30)),
+            cy + r * math.sin(math.radians(60 * i - 30))) for i in range(6)]
     draw.polygon(pts, outline=dim, width=3)
-
     r2 = 88
-    pts2 = []
-    for i in range(6):
-        a = math.radians(60 * i - 30)
-        pts2.append((cx + r2 * math.cos(a), cy + r2 * math.sin(a)))
-    draw.polygon(pts2, outline=cyan, width=2)
-
-    # Inner diamond
+    pts2 = [(cx + r2 * math.cos(math.radians(60 * i - 30)),
+             cy + r2 * math.sin(math.radians(60 * i - 30))) for i in range(6)]
+    draw.polygon(pts2, outline=accent, width=2)
     d = 36
-    draw.polygon(
-        [(cx, cy - d), (cx + d, cy), (cx, cy + d), (cx - d, cy)],
-        outline=cyan,
-        width=3,
-    )
-    # Core
-    draw.ellipse([cx - 8, cy - 8, cx + 8, cy + 8], fill=cyan)
+    draw.polygon([(cx, cy - d), (cx + d, cy), (cx, cy + d), (cx - d, cy)], outline=accent, width=3)
+    draw.ellipse([cx - 8, cy - 8, cx + 8, cy + 8], fill=accent)
 
 
 def render_pnl_card_image(stats: PnlStats) -> bytes:
-    """
-    Professional dark fintech PnL card. Returns PNG bytes.
-    """
+    """Professional dark PnL card with ShadowSnipe skull brand mark."""
     try:
-        from PIL import Image, ImageDraw, ImageFilter
+        from PIL import Image, ImageDraw
     except ImportError as e:
-        raise RuntimeError(
-            "Pillow is required for PnL cards. Add pillow to requirements.txt"
-        ) from e
+        raise RuntimeError("Pillow is required for PnL cards.") from e
 
     W, H = 1280, 720
 
-    # Base with vertical gradient
-    img = Image.new("RGBA", (W, H), (5, 8, 14, 255))
+    img = Image.new("RGBA", (W, H), (5, 8, 12, 255))
     draw = ImageDraw.Draw(img)
-    _vertical_gradient(draw, [0, 0, W, H], (8, 12, 22), (4, 6, 12), steps=64)
+    _vertical_gradient(draw, [0, 0, W, H], (6, 14, 12), (4, 6, 10), steps=64)
 
     positive = stats.profit_sol >= 0
-    accent = (0, 229, 255) if positive else (255, 90, 110)
-    accent_soft = (0, 160, 190) if positive else (180, 60, 80)
-    green = (0, 230, 170)
+    # Neon green matching the brand skull glow
+    accent = (0, 255, 140) if positive else (255, 90, 110)
+    accent_soft = (0, 180, 100) if positive else (180, 60, 80)
+    green = (0, 255, 160)
     red = (255, 95, 115)
     white = (245, 250, 255)
-    muted = (130, 148, 170)
-    panel = (10, 16, 26)
+    muted = (130, 155, 145)
 
-    # Ambient glow blobs
-    _draw_glow_ellipse(img, (220, 180), 260, 160, accent_soft, layers=10)
-    _draw_glow_ellipse(img, (1050, 360), 220, 200, accent_soft, layers=12)
+    _draw_glow_ellipse(img, (240, 160), 240, 150, accent_soft, layers=10)
+    _draw_glow_ellipse(img, (1040, 360), 200, 200, accent_soft, layers=12)
 
     draw = ImageDraw.Draw(img)
 
-    # Outer frame
-    draw.rounded_rectangle([28, 28, W - 28, H - 28], radius=32, outline=(25, 40, 60), width=2)
-    draw.rounded_rectangle([36, 36, W - 36, H - 36], radius=28, outline=(18, 28, 42), width=1)
-
-    # Top accent line
-    draw.rectangle([80, 36, W - 80, 38], fill=(*accent, 180))
+    draw.rounded_rectangle([28, 28, W - 28, H - 28], radius=32, outline=(20, 50, 40), width=2)
+    draw.rounded_rectangle([36, 36, W - 36, H - 36], radius=28, outline=(14, 32, 26), width=1)
+    draw.rectangle([80, 36, W - 80, 38], fill=(*accent, 200))
 
     brand = (getattr(settings, "BOT_USERNAME", "") or "ShadowSnipe").lstrip("@") or "ShadowSnipe"
     brand_disp = brand.upper().replace("_", " ")
@@ -361,10 +368,8 @@ def render_pnl_card_image(stats: PnlStats) -> bytes:
     f_small = _load_font(18, False)
     f_tiny = _load_font(15, False)
 
-    # Brand row
     draw.text((72, 58), brand_disp, fill=accent_soft, font=f_brand)
 
-    # Wallets pill
     badge = f"{stats.wallets} WALLETS"
     try:
         bw = int(draw.textlength(badge, font=f_small)) + 40
@@ -374,19 +379,14 @@ def render_pnl_card_image(stats: PnlStats) -> bytes:
     draw.rounded_rectangle([bx0, by0, bx0 + bw, by0 + 38], radius=19, outline=accent_soft, width=2)
     draw.text((bx0 + 20, by0 + 9), badge, fill=accent, font=f_small)
 
-    # Token symbol
     symbol = stats.symbol if stats.symbol.startswith("$") else f"${stats.symbol}"
     draw.text((72, 118), symbol, fill=white, font=f_sym)
-
-    # Cyan underline under symbol
     try:
         sw = int(draw.textlength(symbol, font=f_sym))
     except Exception:
         sw = 220
-    underline_w = min(sw, 320)
-    draw.rectangle([72, 222, 72 + underline_w, 228], fill=accent)
+    draw.rectangle([72, 222, 72 + min(sw, 320), 228], fill=accent)
 
-    # Metric chips row
     chip_y0, chip_y1 = 260, 350
     gap = 18
     chip_w = (W - 72 - 72 - gap * 3) // 4
@@ -400,10 +400,9 @@ def render_pnl_card_image(stats: PnlStats) -> bytes:
         x0 = 72 + i * (chip_w + gap)
         _draw_metric_chip(
             draw, [x0, chip_y0, x0 + chip_w, chip_y1],
-            lab, val, col, f_label, f_chip_val, sol_tag=sol_tag,
+            lab, val, col, f_label, f_chip_val, accent, sol_tag=sol_tag,
         )
 
-    # Profit block
     profit_sign = "+" if stats.profit_sol >= 0 else ""
     profit_color = green if positive else red
 
@@ -419,18 +418,23 @@ def render_pnl_card_image(stats: PnlStats) -> bytes:
         usd_text = _fmt_usd(stats.profit_usd)
     else:
         usd_text = f"{profit_sign}{_fmt_sol(stats.profit_sol)} SOL"
-
     draw.text((72, 475), usd_text, fill=accent if positive else red, font=f_usd)
 
-    # Divider above footer
-    draw.rectangle([72, H - 88, W - 72, H - 87], fill=(30, 45, 65))
+    draw.rectangle([72, H - 88, W - 72, H - 87], fill=(25, 50, 40))
 
-    # Right-side mark with glow
-    _draw_glow_ellipse(img, (1040, 400), 140, 140, accent_soft, layers=8)
-    draw = ImageDraw.Draw(img)
-    _draw_mark(draw, 1040, 400, positive)
+    # Brand skull logo (right side)
+    logo = _load_brand_logo(size=300)
+    if logo is not None:
+        # soft green glow behind logo
+        _draw_glow_ellipse(img, (1040, 380), 150, 150, accent_soft, layers=10)
+        lx, ly = 1040 - logo.width // 2, 380 - logo.height // 2
+        img.alpha_composite(logo, (lx, ly))
+        draw = ImageDraw.Draw(img)
+    else:
+        _draw_glow_ellipse(img, (1040, 380), 140, 140, accent_soft, layers=8)
+        draw = ImageDraw.Draw(img)
+        _draw_fallback_mark(draw, 1040, 380, accent)
 
-    # Footer
     bot_user = (getattr(settings, "BOT_USERNAME", "") or "ShadowSnipe").lstrip("@")
     mint = stats.token_address or ""
     mint_short = f"{mint[:4]}…{mint[-4:]}" if len(mint) > 12 else mint
@@ -441,10 +445,9 @@ def render_pnl_card_image(stats: PnlStats) -> bytes:
         rw = draw.textlength(footer_r, font=f_tiny)
     except Exception:
         rw = 200
-    draw.text((W - 72 - rw, H - 62), footer_r, fill=(90, 110, 130), font=f_tiny)
+    draw.text((W - 72 - rw, H - 62), footer_r, fill=(80, 110, 95), font=f_tiny)
 
-    # Flatten to RGB PNG
-    out = Image.new("RGB", (W, H), (5, 8, 14))
+    out = Image.new("RGB", (W, H), (5, 8, 12))
     out.paste(img, mask=img.split()[3] if img.mode == "RGBA" else None)
 
     buf = io.BytesIO()
@@ -482,7 +485,6 @@ async def send_pnl_card(
     symbol: Optional[str] = None,
     caption_extra: str = "",
 ) -> Optional[PnlStats]:
-    """Render + send photo. Returns stats or None on failure."""
     from aiogram.types import BufferedInputFile
 
     try:
