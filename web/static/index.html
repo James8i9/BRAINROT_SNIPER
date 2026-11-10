@@ -19,38 +19,100 @@
       </div>
       <div class="topbar-right">
         <button id="themeToggle" class="icon-btn" type="button" title="Toggle theme">◐</button>
+        <button id="btnRefresh" class="icon-btn" type="button" title="Refresh">↻</button>
         <span id="statusPill" class="pill offline">CONNECTING</span>
       </div>
     </header>
 
     <main id="main">
-      <section class="card hero">
-        <div class="label">TOTAL PORTFOLIO BALANCE</div>
-        <div class="balance-row">
-          <span id="balSol" class="balance">—</span>
-          <span class="unit">SOL</span>
-        </div>
-        <div id="balUsd" class="usd">≈ $— USD</div>
-        <div class="hint">Phase 3 shell · live balances in Phase 1</div>
-      </section>
-
-      <section class="card">
-        <div class="row-between">
-          <div class="label">TOTAL PNL</div>
-          <div class="chip-row">
-            <button class="chip active" data-range="24h">24h</button>
-            <button class="chip" data-range="7d">7d</button>
-            <button class="chip" data-range="30d">30d</button>
+      <!-- TERMINAL / PORTFOLIO -->
+      <div id="panel-terminal" class="panel">
+        <section class="card hero">
+          <div class="label">TOTAL PORTFOLIO BALANCE</div>
+          <div class="balance-row">
+            <span id="balSol" class="balance">—</span>
+            <span class="unit">SOL</span>
           </div>
-        </div>
-        <div id="pnlValue" class="pnl">$—</div>
-        <div class="sparkline" aria-hidden="true"></div>
-      </section>
+          <div id="balUsd" class="usd">≈ $— USD</div>
+          <div id="balHint" class="hint">Live balances from your multi-wallets</div>
+        </section>
 
-      <section class="actions">
-        <button class="btn primary" id="btnBuy" type="button" disabled>BUY</button>
-        <button class="btn ghost" id="btnSell" type="button" disabled>SELL</button>
-      </section>
+        <section class="card">
+          <div class="row-between">
+            <div class="label">TOTAL PNL</div>
+            <div class="chip-row">
+              <button class="chip active" data-range="24h">24h</button>
+              <button class="chip" data-range="7d">7d</button>
+              <button class="chip" data-range="30d">30d</button>
+            </div>
+          </div>
+          <div id="pnlValue" class="pnl">$—</div>
+          <div class="sparkline" aria-hidden="true"></div>
+          <div class="hint">PnL tracking expands with trade history</div>
+        </section>
+
+        <section class="actions">
+          <button class="btn primary" id="btnBuy" type="button" disabled>BUY</button>
+          <button class="btn ghost" id="btnSell" type="button" disabled>SELL</button>
+        </section>
+
+        <section id="walletPreview" class="card">
+          <div class="row-between">
+            <div class="label">WALLETS</div>
+            <button type="button" class="link-btn" id="gotoWallets">Manage →</button>
+          </div>
+          <div id="walletPreviewList" class="wallet-list"></div>
+        </section>
+      </div>
+
+      <!-- WALLETS -->
+      <div id="panel-wallets" class="panel hidden">
+        <section class="card">
+          <div class="label">FUND WALLET</div>
+          <div id="fundStatus" class="muted">Checking…</div>
+          <div id="importBox" class="form-block hidden">
+            <p class="muted">Paste private key (base58 / hex / JSON). Encrypted at rest.</p>
+            <textarea id="fundKeyInput" rows="3" placeholder="Private key…" autocomplete="off"></textarea>
+            <button type="button" class="btn primary full" id="btnImportFund">Import Fund Wallet</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="label">BUY WALLETS</div>
+          <div class="row-gap">
+            <select id="buyCount">
+              <option value="2">2 wallets</option>
+              <option value="3">3 wallets</option>
+              <option value="5" selected>5 wallets</option>
+              <option value="10">10 wallets</option>
+            </select>
+            <button type="button" class="btn ghost" id="btnGenBuy">Generate</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="label">DISTRIBUTE SOL</div>
+          <p class="muted">Send the same amount from Fund → each Buy wallet.</p>
+          <div class="row-gap">
+            <input id="distAmount" type="number" min="0" step="0.001" placeholder="SOL each e.g. 0.05" />
+            <button type="button" class="btn primary" id="btnDistribute">Distribute</button>
+          </div>
+          <div id="distResult" class="hint"></div>
+        </section>
+
+        <section class="card">
+          <div class="label">ALL WALLETS</div>
+          <div id="walletFullList" class="wallet-list"></div>
+        </section>
+      </div>
+
+      <!-- POSITIONS / SETTINGS placeholders -->
+      <div id="panel-positions" class="panel hidden">
+        <section class="card"><div class="label">POSITIONS</div><p class="muted">Coming next.</p></section>
+      </div>
+      <div id="panel-settings" class="panel hidden">
+        <section class="card"><div class="label">SETTINGS</div><p class="muted">Theme toggle is in the header.</p></section>
+      </div>
 
       <section id="gateCard" class="card gate hidden">
         <div class="gate-title">🔒 License required</div>
@@ -62,6 +124,8 @@
         <div class="label">SESSION</div>
         <div id="userLine">Authenticating…</div>
       </section>
+
+      <div id="toast" class="toast hidden"></div>
     </main>
 
     <nav class="tabbar">
