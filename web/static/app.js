@@ -13,18 +13,22 @@
   const statusPill = $("statusPill");
   const userLine = $("userLine");
   const gateCard = $("gateCard");
-  const balSol = $("balSol");
-  const balUsd = $("balUsd");
+
+  let canAccess = false;
 
   function initData() {
     return (tg && tg.initData) || "";
   }
 
-  async function api(path) {
+  async function api(path, opts = {}) {
+    const headers = {
+      "X-Telegram-Init-Data": initData(),
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+    };
     const res = await fetch(path, {
-      headers: {
-        "X-Telegram-Init-Data": initData(),
-      },
+      method: opts.method || "GET",
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
     return { res, data };
@@ -35,70 +39,14 @@
     statusPill.textContent = text;
   }
 
-  async function boot() {
-    if (!initData()) {
-      setStatus("offline", "OPEN IN TELEGRAM");
-      userLine.textContent = "Open this page from @ShadowSnipebot → /app";
-      return;
-    }
-
-    const { res, data } = await api("/api/me");
-    if (!res.ok || !data.ok) {
-      setStatus("offline", "AUTH FAILED");
-      userLine.textContent = "Could not verify Telegram session.";
-      return;
-    }
-
-    const u = data.user;
-    const name = u.username ? "@" + u.username : (u.first_name || u.id);
-    userLine.textContent = name + " · id " + u.id;
-
-    if (!u.can_access) {
-      setStatus("locked", "LOCKED");
-      gateCard.classList.remove("hidden");
-      balSol.textContent = "—";
-      balUsd.textContent = "Activate license in the bot";
-      return;
-    }
-
-    setStatus("online", "ONLINE");
-    gateCard.classList.add("hidden");
-
-    // Phase 3 stub — Phase 1 fills real numbers
-    const port = await api("/api/portfolio");
-    if (port.res.ok && port.data.ok) {
-      balSol.textContent = "0.0000";
-      balUsd.textContent = "≈ $0.00 USD · live data next";
-    }
+  function toast(msg, ok = true) {
+    const el = $("toast");
+    el.textContent = msg;
+    el.classList.remove("hidden", "bad", "good");
+    el.classList.add(ok ? "good" : "bad");
+    setTimeout(() => el.classList.add("hidden"), 3200);
   }
 
-  // Theme toggle
-  const root = document.documentElement;
-  const saved = localStorage.getItem("ss_theme");
-  if (saved) root.setAttribute("data-theme", saved);
-  $("themeToggle").addEventListener("click", () => {
-    const next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
-    root.setAttribute("data-theme", next);
-    localStorage.setItem("ss_theme", next);
-  });
-
-  // Chips / tabs (UI only in Phase 3)
-  document.querySelectorAll(".chip").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".chip").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-    });
-  });
-  document.querySelectorAll(".tab").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-    });
-  });
-
-  boot().catch((err) => {
-    console.error(err);
-    setStatus("offline", "ERROR");
-    userLine.textContent = String(err && err.message ? err.message : err);
-  });
-})();
+  function shortAddr(a) {
+    if (!a) return "—";
+    return a.length > 12 ? a.slice(0, 4) + "…
