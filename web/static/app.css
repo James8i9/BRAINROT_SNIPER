@@ -39,10 +39,7 @@ html, body {
   color: var(--text);
 }
 
-body {
-  padding-bottom: 72px;
-}
-
+body { padding-bottom: 72px; }
 #app { max-width: 480px; margin: 0 auto; min-height: 100vh; }
 
 .topbar {
@@ -94,6 +91,7 @@ body {
 .pill.locked { color: var(--danger); border-color: var(--danger); }
 
 main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.panel { display: flex; flex-direction: column; gap: 12px; }
 
 .card {
   background: var(--card);
@@ -106,10 +104,22 @@ main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .balance { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; }
 .unit { color: var(--muted); font-weight: 600; }
 .usd { color: var(--muted); margin-top: 4px; font-size: 14px; }
-.hint { margin-top: 12px; font-size: 12px; color: var(--muted); }
-.label { font-size: 11px; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+.hint { margin-top: 12px; font-size: 12px; color: var(--muted); word-break: break-all; }
+.label { font-size: 11px; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; margin-bottom: 8px; }
 
 .row-between { display: flex; justify-content: space-between; align-items: center; }
+.row-gap { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.row-gap input, .row-gap select, textarea, input[type="number"] {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 14px;
+}
+textarea { width: 100%; margin: 8px 0; resize: vertical; }
+
 .chip-row { display: flex; gap: 6px; }
 .chip {
   border: 1px solid var(--border);
@@ -147,12 +157,60 @@ main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
   color: var(--text);
   border: 1px solid var(--border);
 }
+.btn.full { width: 100%; margin-top: 8px; }
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wallet-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.wallet-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+.wallet-row code { font-size: 12px; }
+.tag {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-right: 4px;
+}
+.wbal { white-space: nowrap; color: var(--text); }
+.form-block { margin-top: 8px; }
 
 .gate { border-color: var(--danger); }
 .gate-title { font-weight: 800; margin-bottom: 8px; }
-.muted { color: var(--muted); font-size: 13px; }
+.muted { color: var(--muted); font-size: 13px; word-break: break-all; }
 .muted-card { opacity: 0.95; }
 .hidden { display: none !important; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  z-index: 50;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  max-width: 90%;
+  text-align: center;
+}
+.toast.good { background: #0a2a1c; color: var(--accent); border: 1px solid var(--accent-dim); }
+.toast.bad { background: #2a1014; color: var(--danger); border: 1px solid var(--danger); }
 
 .tabbar {
   position: fixed;
