@@ -7,7 +7,7 @@ All important commands are gated behind license activation.
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.fsm.context import FSMContext
 
 from bot.keyboards.multi_wallet_menu import (
@@ -17,6 +17,7 @@ from bot.keyboards.multi_wallet_menu import (
 from bot.handlers.multi_wallet import MultiWalletStates, _build_wallet_overview
 from services.multi_wallet_service import get_fund_wallet
 from services.license_service import is_user_activated
+from utils.config import settings
 
 router = Router()
 
@@ -31,6 +32,47 @@ async def _require_license(message: Message) -> bool:
     return False
 
 
+def _mini_app_keyboard() -> InlineKeyboardMarkup | None:
+    url = (settings.MINI_APP_URL or "").rstrip("/")
+    if not url:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="☠ Open ShadowSnipe Terminal",
+            web_app=WebAppInfo(url=url),
+        )]
+    ])
+
+
+@router.message(Command("app"))
+async def cmd_app(message: Message):
+    """Open the ShadowSnipe Mini App terminal."""
+    kb = _mini_app_keyboard()
+    if not kb:
+        await message.answer(
+            "⚠️ Mini App URL is not configured.\n\n"
+            "Set <code>MINI_APP_URL</code> to your Railway public HTTPS URL\n"
+            "(example: <code>https://your-app.up.railway.app</code>), then redeploy.",
+            parse_mode="HTML",
+        )
+        return
+
+    activated = await is_user_activated(message.from_user.id)
+    note = (
+        "Your portfolio & wallets open in the terminal."
+        if activated
+        else "You can open the shell; trading unlocks after activation."
+    )
+    await message.answer(
+        "☠ <b>SHADOW_SNIPE TERMINAL</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{note}\n\n"
+        "Tap the button below to launch the Mini App.",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
 @router.message(Command("wallet"))
 async def cmd_wallet(message: Message, state: FSMContext):
     if not await _require_license(message):
@@ -39,7 +81,6 @@ async def cmd_wallet(message: Message, state: FSMContext):
     user_id = message.from_user.id
     fund = await get_fund_wallet(user_id)
 
-    # First-time setup: jump straight to Import Fund Wallet
     if not fund:
         await state.set_state(MultiWalletStates.waiting_for_fund_key)
         await message.answer(
@@ -57,7 +98,6 @@ async def cmd_wallet(message: Message, state: FSMContext):
         )
         return
 
-    # Already has a fund wallet → full manager overview
     await state.clear()
     text = await _build_wallet_overview(user_id)
     await message.answer(
