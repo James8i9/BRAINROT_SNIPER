@@ -29,6 +29,9 @@ class Settings:
     DISCORD_URL:  str = ""
     TWITTER_URL:  str = ""
     WEBSITE_URL:  str = ""
+    # Public HTTPS origin of this Railway service (no trailing slash)
+    # e.g. https://your-service.up.railway.app
+    MINI_APP_URL: str = ""
     TOKEN_NAME:   str = "TOKEN"
     BRAND_HANDLE: str = ""
     SHARE_HASHTAG: str = ""
@@ -39,9 +42,7 @@ class Settings:
     # ── License / Activation ───────────────────────────────────────────────────
     ACTIVATION_WALLET: str = ""
     ACTIVATION_AMOUNT_SOL: float = 1.0
-    # mainnet | devnet | testnet — payment verification only (trading RPCs unchanged)
     ACTIVATION_NETWORK: str = "testnet"
-    # Optional explicit RPC for activation checks; blank = use network default
     ACTIVATION_RPC_URL: str = ""
 
     # ── Solana trading RPC (mainnet by default) ───────────────────────────────
@@ -94,13 +95,21 @@ def _load_settings() -> Settings:
     ]
     rpc_list = [primary_rpc] + [u for u in extra_rpcs if u != primary_rpc]
 
+    mini_app = (
+        os.getenv("MINI_APP_URL", "").strip().rstrip("/")
+        or os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    )
+    if mini_app and not mini_app.startswith("http"):
+        mini_app = "https://" + mini_app
+
     return Settings(
         BOT_TOKEN=token,
         ADMIN_IDS=admin_ids,
-        BOT_USERNAME=os.getenv("BOT_USERNAME", "").strip().lstrip("@"),
+        BOT_USERNAME=os.getenv("BOT_USERNAME", "ShadowSnipebot").strip().lstrip("@"),
         DISCORD_URL=os.getenv("DISCORD_URL", "").strip(),
         TWITTER_URL=os.getenv("TWITTER_URL", "").strip(),
         WEBSITE_URL=os.getenv("WEBSITE_URL", "").strip(),
+        MINI_APP_URL=mini_app,
         TOKEN_NAME=os.getenv("TOKEN_NAME", "TOKEN").strip(),
         BRAND_HANDLE=os.getenv("BRAND_HANDLE", "").strip(),
         SHARE_HASHTAG=os.getenv("SHARE_HASHTAG", "").strip(),
@@ -132,6 +141,11 @@ def _warn_unconfigured() -> None:
     if not settings.ACTIVATION_WALLET:
         logger.warning(
             "ACTIVATION_WALLET is empty - license activation payments cannot be verified."
+        )
+    if not settings.MINI_APP_URL:
+        logger.warning(
+            "MINI_APP_URL is empty - set it to your Railway public HTTPS URL "
+            "so /app and the Menu Button can open the Mini App."
         )
     logger.info(
         "Activation fee network: %s (amount=%s SOL)",
