@@ -1,7 +1,7 @@
 """
 Main entry point
 ================
-Initializes the bot, registers all routers, and starts long polling.
+Initializes the bot, Mini App HTTP server, registers routers, starts polling.
 """
 
 import asyncio
@@ -11,13 +11,12 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo, MenuButtonCommands
 from utils.sqlite_storage import SQLiteStorage
 
 from bot.handlers import commands
 from utils.config import settings
 from database.db import init_db
-
-from aiogram.types import BotCommand
 
 from bot.handlers import menu, callbacks
 from bot.handlers import activation
@@ -37,6 +36,8 @@ import services.copy_trade_worker as copy_trade_worker
 import services.wallet_discovery_worker as wallet_discovery_worker
 import services.watch_alert_worker as watch_alert_worker
 
+from web.app import start_web_server
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,25 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+async def _configure_menu_button(bot: Bot) -> None:
+    """Attach Mini App to the chat menu button when MINI_APP_URL is set."""
+    url = (settings.MINI_APP_URL or "").rstrip("/")
+    if not url:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+        logger.warning("MINI_APP_URL not set — menu button stays Commands only")
+        return
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Terminal",
+                web_app=WebAppInfo(url=url),
+            )
+        )
+        logger.info("Menu button → Mini App %s", url)
+    except Exception as e:
+        logger.warning("Failed to set WebApp menu button: %s", e)
 
 
 async def main() -> None:
@@ -54,14 +74,19 @@ async def main() -> None:
 
     await bot.set_my_commands([
         BotCommand(command="start",  description="Open the bot"),
+        BotCommand(command="app",    description="Open ShadowSnipe Terminal"),
         BotCommand(command="wallet", description="Import fund wallet / manage wallets"),
         BotCommand(command="pnl",    description="Generate PnL share card"),
     ])
+    await _configure_menu_button(bot)
 
     dp = Dispatcher(storage=SQLiteStorage())
 
     await init_db()
     await seed_system_presets()
+
+    # Mini App HTTP on $PORT (Railway) — same process
+    web_runner = await start_web_server()
 
     dp.include_router(activation.router)
     dp.include_router(commands.router)
@@ -77,9 +102,10 @@ async def main() -> None:
 
     bot_info = await bot.get_me()
     logger.info("=" * 54)
-    logger.info("  ShadowSnipe — Solana Trading Bot")
+    logger.info("  ShadowSnipe — Solana Trading Bot + Mini App")
     logger.info(f"  Bot     : @{bot_info.username}  (ID: {bot_info.id})")
     logger.info(f"  Admins  : {settings.ADMIN_IDS or 'none configured'}")
+    logger.info(f"  MiniApp : {settings.MINI_APP_URL or '(set MINI_APP_URL)'}")
     logger.info("=" * 54)
 
     ws_task = asyncio.create_task(pump_service.start())
@@ -104,6 +130,10 @@ async def main() -> None:
         ct_task.cancel()
         wd_task.cancel()
         wa_task.cancel()
+        try:
+            await web_runner.cleanup()
+        except Exception:
+            pass
         await bot.session.close()
         logger.info("Bot shut down cleanly.")
 
